@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Frontend build output
+dist/
+
+# Rust / Tauri build output
+target/
+src-tauri/target/
+
+# Local runtime data
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.log
+logs/
+
+# Environment / local config
+.env
+.env.*
+!.env.example
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Test and package manager caches
+coverage/
+.nyc_output/
+.npm/
+.pnpm-store/
+.yarn/
+
+# Tauri generated artifacts
+src-tauri/gen/
+src-tauri/.tauri/

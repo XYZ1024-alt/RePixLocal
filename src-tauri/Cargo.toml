@@ -1,0 +1,32 @@
+[package]
+name = "repix-local"
+version = "0.1.0"
+description = "Local AI video replication workflow desktop app"
+edition = "2021"
+
+[lib]
+name = "repix_local"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+aes-gcm = "0.10"
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
+keyring = "3"
+reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono", "uuid"] }
+tauri = { version = "2", features = [] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "fs", "sync"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+uuid = { version = "1", features = ["v4", "serde"] }
+which = "7"
