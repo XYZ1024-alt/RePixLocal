@@ -3,7 +3,8 @@ use tauri::State;
 use crate::config::{save, AppConfig};
 use crate::errors::command_error;
 use crate::models::{
-    Asset, CreateTaskInput, PipelineRun, ProviderCredentialInput, Task, ToolCheck,
+    AppLog, Asset, CreateTaskInput, DashboardSummary, PipelineRun, ProviderCredentialInput, Task,
+    ToolCheck,
 };
 use crate::providers::{validate_provider_config, ProviderConfig};
 use crate::state::AppState;
@@ -22,8 +23,21 @@ pub async fn list_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, String>
 }
 
 #[tauri::command]
+pub async fn get_dashboard_summary(state: State<'_, AppState>) -> Result<DashboardSummary, String> {
+    state.repo.dashboard_summary().await.map_err(command_error)
+}
+
+#[tauri::command]
 pub async fn get_task(task_id: String, state: State<'_, AppState>) -> Result<Option<Task>, String> {
     state.repo.get_task(&task_id).await.map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn get_latest_run(
+    task_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<PipelineRun>, String> {
+    state.repo.latest_run(&task_id).await.map_err(command_error)
 }
 
 #[tauri::command]
@@ -49,6 +63,11 @@ pub async fn list_assets(
         .list_assets(&task_id)
         .await
         .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn list_logs(task_id: String, state: State<'_, AppState>) -> Result<Vec<AppLog>, String> {
+    state.repo.list_logs(&task_id).await.map_err(command_error)
 }
 
 #[tauri::command]

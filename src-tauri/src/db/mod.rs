@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use crate::errors::AppResult;
 use crate::models::{
-    Asset, AssetType, CreateTaskInput, PipelineRun, ProviderCredentialInput, RunStatus,
-    StageStatus, StageType, Task, TaskStatus,
+    AppLog, Asset, AssetType, CreateTaskInput, DashboardSummary, PipelineRun,
+    ProviderCredentialInput, RunStatus, StageStatus, StageType, Task, TaskStatus,
 };
 use crate::secrets::encrypt_secret;
 use crate::workspace::Workspace;
@@ -49,6 +49,18 @@ impl Repository {
         rows.into_iter().map(row_to_task).collect()
     }
 
+    pub async fn dashboard_summary(&self) -> AppResult<DashboardSummary> {
+        Ok(DashboardSummary {
+            total_tasks: self.count_tasks(None).await?,
+            running_tasks: self.count_tasks(Some("running")).await?,
+            completed_tasks: self.count_tasks(Some("completed")).await?,
+            failed_tasks: self.count_tasks(Some("failed")).await?,
+            canceled_tasks: self.count_tasks(Some("canceled")).await?,
+            asset_count: self.count_assets().await?,
+            latest_tasks: self.latest_tasks().await?,
+        })
+    }
+
     pub async fn get_task(&self, task_id: &str) -> AppResult<Option<Task>> {
         let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
             .bind(task_id)
@@ -87,6 +99,15 @@ impl Repository {
         Ok(run)
     }
 
+    pub async fn latest_run(&self, task_id: &str) -> AppResult<Option<PipelineRun>> {
+        let row =
+            sqlx::query("SELECT * FROM runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1")
+                .bind(task_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        row.map(row_to_run).transpose()
+    }
+
     pub async fn start_stage(&self, run_id: &str, stage: StageType) -> AppResult<()> {
         sqlx::query("INSERT INTO stages VALUES (?, ?, ?, ?, NULL, ?, NULL)")
             .bind(Uuid::new_v4().to_string())
@@ -119,6 +140,15 @@ impl Repository {
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter().map(row_to_asset).collect()
+    }
+
+    pub async fn list_logs(&self, task_id: &str) -> AppResult<Vec<AppLog>> {
+        let rows =
+            sqlx::query("SELECT * FROM logs WHERE task_id = ? ORDER BY created_at DESC LIMIT 200")
+                .bind(task_id)
+                .fetch_all(&self.pool)
+                .await?;
+        rows.into_iter().map(row_to_log).collect()
     }
 
     pub async fn insert_asset(&self, asset: &Asset) -> AppResult<()> {
@@ -187,6 +217,30 @@ impl Repository {
             .await?;
         Ok(())
     }
+
+    async fn count_tasks(&self, status: Option<&str>) -> AppResult<i64> {
+        let query = match status {
+            Some(_) => sqlx::query("SELECT COUNT(*) FROM tasks WHERE status = ?").bind(status),
+            None => sqlx::query("SELECT COUNT(*) FROM tasks"),
+        };
+        let count: i64 = query.fetch_one(&self.pool).await?.try_get(0)?;
+        Ok(count)
+    }
+
+    async fn count_assets(&self) -> AppResult<i64> {
+        let count: i64 = sqlx::query("SELECT COUNT(*) FROM assets")
+            .fetch_one(&self.pool)
+            .await?
+            .try_get(0)?;
+        Ok(count)
+    }
+
+    async fn latest_tasks(&self) -> AppResult<Vec<Task>> {
+        let rows = sqlx::query("SELECT * FROM tasks ORDER BY created_at DESC LIMIT 6")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter().map(row_to_task).collect()
+    }
 }
 
 async fn insert_task(pool: &SqlitePool, task: &Task) -> AppResult<()> {
@@ -225,6 +279,31 @@ fn row_to_asset(row: sqlx::sqlite::SqliteRow) -> AppResult<Asset> {
         path: row.try_get("path")?,
         mime_type: row.try_get("mime_type")?,
         scene_index: row.try_get("scene_index")?,
+        created_at: parse_time(row.try_get::<String, _>("created_at")?)?,
+    })
+}
+
+fn row_to_run(row: sqlx::sqlite::SqliteRow) -> AppResult<PipelineRun> {
+    Ok(PipelineRun {
+        id: row.try_get("id")?,
+        task_id: row.try_get("task_id")?,
+        status: parse_run_status(row.try_get::<String, _>("status")?),
+        current_stage: parse_stage_option(row.try_get::<Option<String>, _>("current_stage")?),
+        error: row.try_get("error")?,
+        started_at: parse_optional_time(row.try_get("started_at")?)?,
+        finished_at: parse_optional_time(row.try_get("finished_at")?)?,
+    })
+}
+
+fn row_to_log(row: sqlx::sqlite::SqliteRow) -> AppResult<AppLog> {
+    let context: Option<String> = row.try_get("context_json")?;
+    Ok(AppLog {
+        id: row.try_get("id")?,
+        task_id: row.try_get("task_id")?,
+        run_id: row.try_get("run_id")?,
+        level: row.try_get("level")?,
+        message: row.try_get("message")?,
+        context_json: parse_context(context)?,
         created_at: parse_time(row.try_get::<String, _>("created_at")?)?,
     })
 }
@@ -285,6 +364,29 @@ fn parse_task_status(value: String) -> TaskStatus {
     }
 }
 
+fn parse_run_status(value: String) -> RunStatus {
+    match value.as_str() {
+        "completed" => RunStatus::Completed,
+        "failed" => RunStatus::Failed,
+        "canceled" => RunStatus::Canceled,
+        _ => RunStatus::Running,
+    }
+}
+
+fn parse_stage_option(value: Option<String>) -> Option<StageType> {
+    value.map(parse_stage_type)
+}
+
+fn parse_stage_type(value: String) -> StageType {
+    match value.as_str() {
+        "script_rewrite" => StageType::ScriptRewrite,
+        "storyboard_generation" => StageType::StoryboardGeneration,
+        "segment_generation" => StageType::SegmentGeneration,
+        "final_render" => StageType::FinalRender,
+        _ => StageType::TranscriptExtraction,
+    }
+}
+
 fn parse_asset_type(value: String) -> AssetType {
     match value.as_str() {
         "audio" => AssetType::Audio,
@@ -313,4 +415,15 @@ fn parse_time(value: String) -> AppResult<chrono::DateTime<Utc>> {
     let parsed = chrono::DateTime::parse_from_rfc3339(&value)
         .map_err(|error| crate::errors::AppError::Database(sqlx::Error::Decode(Box::new(error))))?;
     Ok(parsed.with_timezone(&Utc))
+}
+
+fn parse_optional_time(value: Option<String>) -> AppResult<Option<chrono::DateTime<Utc>>> {
+    value.map(parse_time).transpose()
+}
+
+fn parse_context(value: Option<String>) -> AppResult<Option<Value>> {
+    value
+        .map(|raw| serde_json::from_str::<Value>(&raw))
+        .transpose()
+        .map_err(Into::into)
 }

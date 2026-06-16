@@ -15,6 +15,7 @@ src-tauri/target/
 *.sqlite-*
 *.log
 logs/
+repix-local-development.md
 
 # Environment / local config
 .env
@@ -37,3 +38,7 @@ coverage/
 # Tauri generated artifacts
 src-tauri/gen/
 src-tauri/.tauri/
+
+# Local / generated assets
+mcps/
+ui.png

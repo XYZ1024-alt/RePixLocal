@@ -88,6 +88,28 @@ pub struct Asset {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppLog {
+    pub id: String,
+    pub task_id: Option<String>,
+    pub run_id: Option<String>,
+    pub level: String,
+    pub message: String,
+    pub context_json: Option<Value>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardSummary {
+    pub total_tasks: i64,
+    pub running_tasks: i64,
+    pub completed_tasks: i64,
+    pub failed_tasks: i64,
+    pub canceled_tasks: i64,
+    pub asset_count: i64,
+    pub latest_tasks: Vec<Task>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTaskInput {
     pub title: String,
     pub source_path: String,
