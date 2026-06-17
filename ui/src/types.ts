@@ -197,6 +197,9 @@ export type Settings = {
   ffmpeg_path?: string;
   ffprobe_path?: string;
   asr_model?: string;
+  mock_providers?: boolean;
+  whisper_bin?: string;
+  whisper_model_dir?: string;
 };
 
 export type CreateTaskPayload = {

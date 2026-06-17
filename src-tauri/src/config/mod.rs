@@ -29,9 +29,18 @@ impl AppConfig {
             asr_model: Some("base".to_string()),
             mock_providers: true,
             whisper_bin: None,
-            whisper_model_dir: None,
+            whisper_model_dir: Some(default_whisper_model_dir(workspace)),
         }
     }
+}
+
+fn default_whisper_model_dir(workspace: &Workspace) -> String {
+    workspace
+        .root()
+        .join("models")
+        .join("whisper")
+        .to_string_lossy()
+        .to_string()
 }
 
 pub async fn load_or_create(workspace: &Workspace) -> AppResult<AppConfig> {

@@ -27,6 +27,10 @@ impl AssetManager {
         Self { workspace }
     }
 
+    pub fn workspace(&self) -> &Workspace {
+        &self.workspace
+    }
+
     pub async fn import_source_video(&self, task_id: &str, source_path: &str) -> AppResult<Asset> {
         let source = PathBuf::from(source_path);
         validate_readable_file(&source).await?;

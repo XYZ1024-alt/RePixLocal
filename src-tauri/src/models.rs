@@ -164,6 +164,20 @@ pub struct ProviderCredentialInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptSegment {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptResult {
+    pub language: String,
+    pub segments: Vec<TranscriptSegment>,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCheck {
     pub name: String,
     pub found: bool,

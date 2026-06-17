@@ -158,7 +158,9 @@ pub async fn list_logs(task_id: String, state: State<'_, AppState>) -> Result<Ve
 
 #[tauri::command]
 pub async fn check_ffmpeg(state: State<'_, AppState>) -> Result<Vec<ToolCheck>, String> {
-    Ok(state.ffmpeg.check_tools().await)
+    let mut tools = state.ffmpeg.check_tools().await;
+    tools.push(state.whisper.check_tool().await);
+    Ok(tools)
 }
 
 #[tauri::command]

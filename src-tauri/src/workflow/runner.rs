@@ -10,8 +10,11 @@ use crate::config::AppConfig;
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
 use crate::media::ffmpeg::FfmpegRunner;
+use crate::media::subtitles::segments_to_json;
+use crate::media::whisper::WhisperRunner;
 use crate::models::{AssetType, Scene, StageType, Task, TaskStatus};
 use crate::storage::local_assets::{asset_for_path, mock_transcript_segments, AssetManager};
+use crate::workspace::Workspace;
 use crate::workflow::events::{emit_pipeline_event, PipelineEvent};
 use crate::workflow::stages::{ordered_stages, stage_event_name};
 
@@ -19,8 +22,10 @@ use crate::workflow::stages::{ordered_stages, stage_event_name};
 pub struct PipelineRunner {
     repo: Arc<Repository>,
     assets: Arc<AssetManager>,
-    _ffmpeg: Arc<FfmpegRunner>,
+    ffmpeg: Arc<FfmpegRunner>,
+    whisper: Arc<WhisperRunner>,
     config: Arc<RwLock<AppConfig>>,
+    workspace: Workspace,
 }
 
 impl PipelineRunner {
@@ -28,36 +33,31 @@ impl PipelineRunner {
         repo: Arc<Repository>,
         assets: Arc<AssetManager>,
         ffmpeg: Arc<FfmpegRunner>,
+        whisper: Arc<WhisperRunner>,
         config: Arc<RwLock<AppConfig>>,
     ) -> Self {
         Self {
+            workspace: assets.workspace().clone(),
             repo,
             assets,
-            _ffmpeg: ffmpeg,
+            ffmpeg,
+            whisper,
             config,
         }
     }
 
     pub async fn run(&self, task_id: &str, run_id: &str, app: &AppHandle) -> AppResult<()> {
         let mock = self.config.read().await.mock_providers;
-        if mock {
-            self.run_mock(task_id, run_id, app).await
-        } else {
-            self.fail_pipeline(
-                task_id,
-                run_id,
-                StageType::TranscriptExtraction,
-                "real provider pipeline is not implemented yet; enable mock_providers in settings",
-                app,
-            )
-            .await?;
-            Err(AppError::Workflow(
-                "real provider pipeline is not implemented yet".into(),
-            ))
-        }
+        self.run_pipeline(task_id, run_id, app, mock).await
     }
 
-    async fn run_mock(&self, task_id: &str, run_id: &str, app: &AppHandle) -> AppResult<()> {
+    async fn run_pipeline(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+        mock: bool,
+    ) -> AppResult<()> {
         let task = self
             .repo
             .get_task(task_id)
@@ -70,27 +70,18 @@ impl PipelineRunner {
             if self.is_canceled(task_id).await? {
                 return Ok(());
             }
-            let result = match stage {
-                StageType::TranscriptExtraction => {
-                    self.mock_transcript_stage(task_id, run_id, app).await
-                }
-                StageType::ScriptRewrite => {
-                    self.mock_rewrite_stage(task_id, run_id, app, &task, scene_count)
-                        .await
-                }
-                StageType::StoryboardGeneration => {
-                    self.mock_storyboard_stage(task_id, run_id, app, scene_count)
-                        .await
-                }
-                StageType::SegmentGeneration => {
-                    self.mock_segment_stage(task_id, run_id, app, scene_count, &source_video)
-                        .await
-                }
-                StageType::FinalRender => {
-                    self.mock_render_stage(task_id, run_id, app, &source_video)
-                        .await
-                }
-            };
+            let result = self
+                .execute_stage(
+                    task_id,
+                    run_id,
+                    app,
+                    &stage,
+                    &task,
+                    scene_count,
+                    &source_video,
+                    mock,
+                )
+                .await;
             if let Err(error) = result {
                 self.fail_pipeline(task_id, run_id, stage, &error.to_string(), app)
                     .await?;
@@ -110,6 +101,142 @@ impl PipelineRunner {
             },
         );
         Ok(())
+    }
+
+    async fn execute_stage(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+        stage: &StageType,
+        task: &Task,
+        scene_count: i32,
+        source_video: &std::path::Path,
+        mock: bool,
+    ) -> AppResult<()> {
+        if mock {
+            return match stage {
+                StageType::TranscriptExtraction => {
+                    self.mock_transcript_stage(task_id, run_id, app).await
+                }
+                StageType::ScriptRewrite => {
+                    self.mock_rewrite_stage(task_id, run_id, app, task, scene_count)
+                        .await
+                }
+                StageType::StoryboardGeneration => {
+                    self.mock_storyboard_stage(task_id, run_id, app, scene_count)
+                        .await
+                }
+                StageType::SegmentGeneration => {
+                    self.mock_segment_stage(task_id, run_id, app, scene_count, source_video)
+                        .await
+                }
+                StageType::FinalRender => {
+                    self.mock_render_stage(task_id, run_id, app, source_video)
+                        .await
+                }
+            };
+        }
+
+        match stage {
+            StageType::TranscriptExtraction => {
+                self.real_transcript_stage(task_id, run_id, app, task, source_video)
+                    .await
+            }
+            _ => Err(AppError::Workflow(format!(
+                "{} is not implemented yet (coming in PR8+)",
+                stage_event_name(stage)
+            ))),
+        }
+    }
+
+    async fn real_transcript_stage(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+        task: &Task,
+        source_video: &std::path::Path,
+    ) -> AppResult<()> {
+        self.begin_stage(run_id, &StageType::TranscriptExtraction, app)
+            .await?;
+        self.log(task_id, run_id, app, "info", "Extracting audio track")
+            .await?;
+
+        let audio_path = self.assets.audio_path(task_id);
+        self.ffmpeg
+            .extract_audio(source_video, &audio_path)
+            .await?;
+        let audio = asset_for_path(
+            task_id,
+            run_id,
+            AssetType::Audio,
+            audio_path.clone(),
+            "audio/wav",
+            None,
+        );
+        self.repo.insert_asset(&audio).await?;
+
+        self.log(task_id, run_id, app, "info", "Transcribing with whisper.cpp")
+            .await?;
+        let language = task
+            .config_json
+            .get("language")
+            .and_then(|value| value.as_str());
+        let output_prefix = self
+            .workspace
+            .root()
+            .join("temp")
+            .join(format!("{task_id}-{run_id}-whisper"));
+        let transcript = self
+            .whisper
+            .transcribe(&audio_path, language, &output_prefix)
+            .await?;
+
+        let subtitle_path = self.assets.subtitle_path(task_id);
+        let segments = segments_to_json(&transcript.segments);
+        self.assets
+            .write_subtitle_json(&subtitle_path, &segments)
+            .await?;
+        let subtitle = asset_for_path(
+            task_id,
+            run_id,
+            AssetType::Subtitle,
+            subtitle_path,
+            "application/json",
+            None,
+        );
+        self.repo.insert_asset(&subtitle).await?;
+
+        let duration_secs = transcript
+            .segments
+            .last()
+            .map(|segment| segment.end_ms as f64 / 1000.0)
+            .unwrap_or(0.0);
+        self.record_usage(
+            "ASR",
+            task_id,
+            run_id,
+            "transcribe",
+            "seconds",
+            duration_secs,
+        )
+        .await?;
+        self.log(
+            task_id,
+            run_id,
+            app,
+            "info",
+            &format!(
+                "Transcript ready ({} segments, language={})",
+                transcript.segments.len(),
+                transcript.language
+            ),
+        )
+        .await?;
+
+        self.complete_stage(run_id, &StageType::TranscriptExtraction, app)
+            .await
     }
 
     async fn mock_transcript_stage(

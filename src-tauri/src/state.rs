@@ -5,6 +5,7 @@ use tokio::sync::RwLock;
 use crate::config::AppConfig;
 use crate::db::Repository;
 use crate::media::ffmpeg::FfmpegRunner;
+use crate::media::whisper::WhisperRunner;
 use crate::storage::local_assets::AssetManager;
 use crate::workflow::engine::WorkflowEngine;
 use crate::workspace::Workspace;
@@ -16,6 +17,7 @@ pub struct AppState {
     pub repo: Arc<Repository>,
     pub workflow: WorkflowEngine,
     pub ffmpeg: Arc<FfmpegRunner>,
+    pub whisper: Arc<WhisperRunner>,
 }
 
 impl AppState {
@@ -29,13 +31,21 @@ impl AppState {
         let repo = Arc::new(repo);
         let assets = Arc::new(assets);
         let ffmpeg = Arc::new(FfmpegRunner::new(config.clone()));
-        let workflow = WorkflowEngine::new(repo.clone(), assets, ffmpeg.clone(), config.clone());
+        let whisper = Arc::new(WhisperRunner::new(config.clone()));
+        let workflow = WorkflowEngine::new(
+            repo.clone(),
+            assets,
+            ffmpeg.clone(),
+            whisper.clone(),
+            config.clone(),
+        );
         Self {
             workspace,
             config,
             repo,
             workflow,
             ffmpeg,
+            whisper,
         }
     }
 }

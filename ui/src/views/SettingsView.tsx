@@ -360,6 +360,9 @@ function SystemSettingsForm(props: {
   const [asrModel, setAsrModel] = useState(props.initialSettings.asr_model ?? "base");
   const [ffmpegBin, setFfmpegBin] = useState(props.initialSettings.ffmpeg_path ?? "ffmpeg");
   const [ffprobeBin, setFfprobeBin] = useState(props.initialSettings.ffprobe_path ?? "ffprobe");
+  const [whisperBin, setWhisperBin] = useState(props.initialSettings.whisper_bin ?? "");
+  const [whisperModelDir, setWhisperModelDir] = useState(props.initialSettings.whisper_model_dir ?? "");
+  const [mockProviders, setMockProviders] = useState(props.initialSettings.mock_providers ?? true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -367,6 +370,9 @@ function SystemSettingsForm(props: {
     setAsrModel(props.initialSettings.asr_model ?? "base");
     setFfmpegBin(props.initialSettings.ffmpeg_path ?? "ffmpeg");
     setFfprobeBin(props.initialSettings.ffprobe_path ?? "ffprobe");
+    setWhisperBin(props.initialSettings.whisper_bin ?? "");
+    setWhisperModelDir(props.initialSettings.whisper_model_dir ?? "");
+    setMockProviders(props.initialSettings.mock_providers ?? true);
   }, [props.initialSettings]);
 
   async function handleSave(event: React.FormEvent) {
@@ -378,7 +384,10 @@ function SystemSettingsForm(props: {
         workspace_root: props.initialSettings.workspace_root,
         ffmpeg_path: ffmpegBin,
         ffprobe_path: ffprobeBin,
-        asr_model: asrModel
+        asr_model: asrModel,
+        mock_providers: mockProviders,
+        whisper_bin: whisperBin.trim() || undefined,
+        whisper_model_dir: whisperModelDir.trim() || undefined
       });
       props.onSaved(saved);
       setMessage({ type: "success", text: t("system.saved") });
@@ -402,6 +411,20 @@ function SystemSettingsForm(props: {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSave} className="space-y-6">
+            <div className="flex items-start gap-3 rounded-md border border-border/60 px-3 py-3">
+              <input
+                id="mockProviders"
+                type="checkbox"
+                checked={mockProviders}
+                onChange={(event) => setMockProviders(event.target.checked)}
+                className="mt-1"
+              />
+              <div>
+                <Label htmlFor="mockProviders">{t("system.mockProviders")}</Label>
+                <p className="mt-1 text-xs text-muted-foreground">{t("system.mockProvidersHint")}</p>
+              </div>
+            </div>
+
             <div>
               <Label htmlFor="asrModel">{t("system.whisperModel")}</Label>
               <Select value={asrModel} onValueChange={setAsrModel}>
@@ -417,6 +440,30 @@ function SystemSettingsForm(props: {
                 </SelectContent>
               </Select>
               <p className="mt-1.5 text-xs text-muted-foreground">{t("system.whisperHint")}</p>
+            </div>
+
+            <div>
+              <Label htmlFor="whisperBin">{t("system.whisperBin")}</Label>
+              <Input
+                id="whisperBin"
+                value={whisperBin}
+                onChange={(event) => setWhisperBin(event.target.value)}
+                placeholder="whisper-cli"
+                className="mt-1.5"
+              />
+              <p className="mt-1.5 text-xs text-muted-foreground">{t("system.whisperBinHint")}</p>
+            </div>
+
+            <div>
+              <Label htmlFor="whisperModelDir">{t("system.whisperModelDir")}</Label>
+              <Input
+                id="whisperModelDir"
+                value={whisperModelDir}
+                onChange={(event) => setWhisperModelDir(event.target.value)}
+                placeholder={props.initialSettings.workspace_root}
+                className="mt-1.5"
+              />
+              <p className="mt-1.5 text-xs text-muted-foreground">{t("system.whisperModelDirHint")}</p>
             </div>
 
             <div>

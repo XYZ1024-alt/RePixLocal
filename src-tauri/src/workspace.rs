@@ -42,7 +42,7 @@ impl Workspace {
     }
 
     async fn create_layout(&self) -> AppResult<()> {
-        for dir in ["logs", "tasks", "temp"] {
+        for dir in ["logs", "tasks", "temp", "models/whisper"] {
             fs::create_dir_all(self.root.join(dir)).await?;
         }
         Ok(())

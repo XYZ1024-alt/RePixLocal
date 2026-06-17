@@ -97,6 +97,72 @@ impl FfmpegRunner {
         Err(AppError::Workflow("ffmpeg concat failed".into()))
     }
 
+    pub async fn probe_duration(&self, path: &Path) -> AppResult<f64> {
+        let ffprobe = self.ffprobe_path().await?;
+        let output = Command::new(&ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
+                &path_arg(path),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(AppError::from)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AppError::Workflow(format!(
+                "ffprobe duration probe failed: {}",
+                stderr.trim()
+            )));
+        }
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        parsed
+            .get("format")
+            .and_then(|value| value.get("duration"))
+            .and_then(|value| value.as_str())
+            .and_then(|value| value.parse::<f64>().ok())
+            .ok_or_else(|| AppError::Workflow("ffprobe returned no duration".into()))
+    }
+
+    pub async fn extract_frames(
+        &self,
+        video_path: &Path,
+        output_pattern: &Path,
+        video_filter: &str,
+    ) -> AppResult<()> {
+        let ffmpeg = self.ffmpeg_path().await?;
+        let status = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-i",
+                &path_arg(video_path),
+                "-vf",
+                video_filter,
+                "-vsync",
+                "0",
+                "-frame_pts",
+                "1",
+                &path_arg(output_pattern),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status()
+            .await
+            .map_err(AppError::from)?;
+        if status.success() {
+            return Ok(());
+        }
+        Err(AppError::Workflow("ffmpeg keyframe extraction failed".into()))
+    }
+
     pub async fn copy_stream(&self, input: &Path, output: &Path) -> AppResult<()> {
         let ffmpeg = self.ffmpeg_path().await?;
         let status = Command::new(&ffmpeg)
@@ -117,6 +183,13 @@ impl FfmpegRunner {
         let config = self.config.read().await;
         resolve_binary(config.ffmpeg_path.as_deref(), "ffmpeg").ok_or_else(|| {
             AppError::Workflow("ffmpeg is not configured or not found in PATH".into())
+        })
+    }
+
+    async fn ffprobe_path(&self) -> AppResult<PathBuf> {
+        let config = self.config.read().await;
+        resolve_binary(config.ffprobe_path.as_deref(), "ffprobe").ok_or_else(|| {
+            AppError::Workflow("ffprobe is not configured or not found in PATH".into())
         })
     }
 }

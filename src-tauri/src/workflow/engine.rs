@@ -7,6 +7,7 @@ use crate::config::AppConfig;
 use crate::db::Repository;
 use crate::errors::AppResult;
 use crate::media::ffmpeg::FfmpegRunner;
+use crate::media::whisper::WhisperRunner;
 use crate::models::{PipelineRun, TaskStatus};
 use crate::storage::local_assets::AssetManager;
 use crate::workflow::events::{emit_pipeline_event, PipelineEvent};
@@ -17,6 +18,7 @@ pub struct WorkflowEngine {
     repo: Arc<Repository>,
     assets: Arc<AssetManager>,
     ffmpeg: Arc<FfmpegRunner>,
+    whisper: Arc<WhisperRunner>,
     config: Arc<RwLock<AppConfig>>,
 }
 
@@ -25,12 +27,14 @@ impl WorkflowEngine {
         repo: Arc<Repository>,
         assets: Arc<AssetManager>,
         ffmpeg: Arc<FfmpegRunner>,
+        whisper: Arc<WhisperRunner>,
         config: Arc<RwLock<AppConfig>>,
     ) -> Self {
         Self {
             repo,
             assets,
             ffmpeg,
+            whisper,
             config,
         }
     }
@@ -62,6 +66,7 @@ impl WorkflowEngine {
             self.repo.clone(),
             self.assets.clone(),
             self.ffmpeg.clone(),
+            self.whisper.clone(),
             self.config.clone(),
         );
         let app_handle = app.clone();
