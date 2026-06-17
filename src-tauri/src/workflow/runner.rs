@@ -10,9 +10,12 @@ use crate::config::AppConfig;
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
 use crate::media::ffmpeg::FfmpegRunner;
-use crate::media::subtitles::segments_to_json;
+use crate::media::frames::{extract_keyframes, KeyframeOptions, DEFAULT_SUBTITLE_REGION_RATIO};
+use crate::media::subtitles::{read_segments_from_json, segments_to_json, transcript_text};
 use crate::media::whisper::WhisperRunner;
 use crate::models::{AssetType, Scene, StageType, Task, TaskStatus};
+use crate::providers::deepseek::DeepSeekClient;
+use crate::providers::qwen_vl::QwenVlClient;
 use crate::storage::local_assets::{asset_for_path, mock_transcript_segments, AssetManager};
 use crate::workspace::Workspace;
 use crate::workflow::events::{emit_pipeline_event, PipelineEvent};
@@ -143,8 +146,12 @@ impl PipelineRunner {
                 self.real_transcript_stage(task_id, run_id, app, task, source_video)
                     .await
             }
+            StageType::ScriptRewrite => {
+                self.real_rewrite_stage(task_id, run_id, app, task, scene_count, source_video)
+                    .await
+            }
             _ => Err(AppError::Workflow(format!(
-                "{} is not implemented yet (coming in PR8+)",
+                "{} is not implemented yet (coming in PR9+)",
                 stage_event_name(stage)
             ))),
         }
@@ -193,10 +200,35 @@ impl PipelineRunner {
             .transcribe(&audio_path, language, &output_prefix)
             .await?;
 
+        let mut segments = transcript.segments;
+        if should_correct_subtitles(&task.config_json) {
+            self.log(task_id, run_id, app, "info", "Correcting subtitles with DeepSeek")
+                .await?;
+            let deepseek = DeepSeekClient::new(self.repo.clone());
+            segments = deepseek
+                .correct_subtitles(&segments, &subtitle_target_language(&task.config_json))
+                .await?;
+            self.record_usage(
+                "DEEPSEEK",
+                task_id,
+                run_id,
+                "chat/completions",
+                "tokens",
+                segments.len() as f64 * 80.0,
+            )
+            .await?;
+        }
+
+        let segment_count = segments.len();
+        let duration_secs = segments
+            .last()
+            .map(|segment| segment.end_ms as f64 / 1000.0)
+            .unwrap_or(0.0);
+
         let subtitle_path = self.assets.subtitle_path(task_id);
-        let segments = segments_to_json(&transcript.segments);
+        let subtitle_json = segments_to_json(&segments);
         self.assets
-            .write_subtitle_json(&subtitle_path, &segments)
+            .write_subtitle_json(&subtitle_path, &subtitle_json)
             .await?;
         let subtitle = asset_for_path(
             task_id,
@@ -207,12 +239,6 @@ impl PipelineRunner {
             None,
         );
         self.repo.insert_asset(&subtitle).await?;
-
-        let duration_secs = transcript
-            .segments
-            .last()
-            .map(|segment| segment.end_ms as f64 / 1000.0)
-            .unwrap_or(0.0);
         self.record_usage(
             "ASR",
             task_id,
@@ -228,14 +254,162 @@ impl PipelineRunner {
             app,
             "info",
             &format!(
-                "Transcript ready ({} segments, language={})",
-                transcript.segments.len(),
+                "Transcript ready ({segment_count} segments, language={})",
                 transcript.language
             ),
         )
         .await?;
 
         self.complete_stage(run_id, &StageType::TranscriptExtraction, app)
+            .await
+    }
+
+    async fn real_rewrite_stage(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+        task: &Task,
+        scene_count: i32,
+        source_video: &std::path::Path,
+    ) -> AppResult<()> {
+        self.begin_stage(run_id, &StageType::ScriptRewrite, app)
+            .await?;
+
+        self.log(
+            task_id,
+            run_id,
+            app,
+            "info",
+            &format!("Extracting {scene_count} keyframes from source video"),
+        )
+        .await?;
+        let keyframe_dir = self
+            .workspace
+            .task_dir(task_id)
+            .join("keyframes");
+        let subtitle_region_ratio = keyframe_subtitle_region_ratio(&task.config_json)?;
+        if subtitle_region_ratio.is_some() {
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                &format!(
+                    "Blurring bottom {:.0}% subtitle region",
+                    subtitle_region_ratio.unwrap_or(DEFAULT_SUBTITLE_REGION_RATIO) * 100.0
+                ),
+            )
+            .await?;
+        }
+        let frame_paths = extract_keyframes(
+            &self.ffmpeg,
+            source_video,
+            &keyframe_dir,
+            scene_count,
+            KeyframeOptions {
+                subtitle_region_ratio,
+            },
+        )
+        .await?;
+
+        let mut keyframe_paths = Vec::with_capacity(frame_paths.len());
+        for (index, frame_path) in frame_paths.iter().enumerate() {
+            let keyframe = asset_for_path(
+                task_id,
+                run_id,
+                AssetType::Keyframe,
+                frame_path.clone(),
+                "image/png",
+                Some(index as i32),
+            );
+            self.repo.insert_asset(&keyframe).await?;
+            keyframe_paths.push(frame_path.to_string_lossy().to_string());
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                &format!("Keyframe {index} extracted"),
+            )
+            .await?;
+        }
+
+        self.log(
+            task_id,
+            run_id,
+            app,
+            "info",
+            &format!(
+                "Analyzing video sequence ({} frames) with Qwen-VL",
+                keyframe_paths.len()
+            ),
+        )
+        .await?;
+        let qwen = QwenVlClient::new(self.repo.clone());
+        let analysis = qwen.analyze_video_frames(&frame_paths).await?;
+        self.record_usage(
+            "QWEN_VL",
+            task_id,
+            run_id,
+            "multimodal-generation/generation",
+            "images",
+            analysis.frame_count as f64,
+        )
+        .await?;
+
+        let subtitle_path = self.assets.subtitle_path(task_id);
+        let segments = read_segments_from_json(&subtitle_path).await?;
+        let transcript = transcript_text(&segments);
+        let tone = task
+            .config_json
+            .get("rewriteTone")
+            .and_then(|value| value.as_str())
+            .unwrap_or("faithful");
+        self.log(task_id, run_id, app, "info", "Rewriting script with visual context")
+            .await?;
+        let deepseek = DeepSeekClient::new(self.repo.clone());
+        let scenes = deepseek
+            .rewrite_script_with_visuals(
+                &transcript,
+                &analysis.descriptions,
+                &keyframe_paths,
+                tone,
+                scene_count,
+            )
+            .await?;
+        self.record_usage(
+            "DEEPSEEK",
+            task_id,
+            run_id,
+            "chat/completions",
+            "tokens",
+            scene_count as f64 * 150.0,
+        )
+        .await?;
+
+        for scene in scenes {
+            let metadata_json = Some(json!({
+                "keyframePath": scene.keyframe_path,
+                "startMs": scene.start_ms,
+                "endMs": scene.end_ms,
+            }));
+            self.repo
+                .insert_scene(&Scene {
+                    id: Uuid::new_v4().to_string(),
+                    task_id: task_id.to_string(),
+                    run_id: Some(run_id.to_string()),
+                    scene_index: scene.index,
+                    script_text: scene.script_text,
+                    visual_prompt: scene.visual_prompt,
+                    motion_prompt: scene.motion_prompt,
+                    metadata_json,
+                    created_at: Utc::now(),
+                })
+                .await?;
+        }
+
+        self.complete_stage(run_id, &StageType::ScriptRewrite, app)
             .await
     }
 
@@ -629,4 +803,45 @@ fn scene_count_from_config(config: &serde_json::Value) -> i32 {
         .and_then(|value| value.as_i64())
         .unwrap_or(5)
         .clamp(1, 20) as i32
+}
+
+fn should_correct_subtitles(config: &serde_json::Value) -> bool {
+    config
+        .get("subtitleSource")
+        .and_then(|value| value.as_str())
+        .unwrap_or("corrected_asr")
+        == "corrected_asr"
+}
+
+fn subtitle_target_language(config: &serde_json::Value) -> String {
+    if config
+        .get("language")
+        .and_then(|value| value.as_str())
+        == Some("en")
+    {
+        "English".to_string()
+    } else {
+        "Simplified Chinese".to_string()
+    }
+}
+
+fn keyframe_subtitle_region_ratio(config: &serde_json::Value) -> AppResult<Option<f64>> {
+    let treatment = config
+        .get("sourceSubtitleTreatment")
+        .and_then(|value| value.as_str())
+        .unwrap_or("blur");
+    if treatment == "none" {
+        return Ok(None);
+    }
+    if treatment != "blur" {
+        return Err(AppError::Workflow(format!(
+            "unsupported sourceSubtitleTreatment: {treatment}"
+        )));
+    }
+    Ok(Some(
+        config
+            .get("sourceSubtitleRegionRatio")
+            .and_then(|value| value.as_f64())
+            .unwrap_or(DEFAULT_SUBTITLE_REGION_RATIO),
+    ))
 }

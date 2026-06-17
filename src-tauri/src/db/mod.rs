@@ -9,7 +9,8 @@ use crate::errors::AppResult;
 use crate::models::{
     AppLog, Asset, AssetStatus, AssetType, CostSummary, CreateTaskInput, DashboardData,
     DashboardStats, ProviderCostSummary, ProviderCredentialConfig, ProviderCredentialInput,
-    ProviderCredentialView, QueueItem, RunDetail, RunDetailLog, RunDetailStage, RunListItem,
+    ProviderCredentialView, ProviderSettings, QueueItem, RunDetail, RunDetailLog, RunDetailStage,
+    RunListItem,
     Scene, TrendPoint, UsageItem, DashboardSummary, PipelineRun, PipelineStage, RunStatus,
     StageStatus, StageType, Task, TaskStatus,
 };
@@ -211,6 +212,38 @@ impl Repository {
             trend,
             queue,
             usage,
+        })
+    }
+
+    pub async fn get_provider_settings(&self, provider: &str) -> AppResult<ProviderSettings> {
+        let row = sqlx::query(
+            "SELECT encrypted_key, base_url, model FROM provider_credentials \
+             WHERE UPPER(provider) = ? ORDER BY updated_at DESC LIMIT 1",
+        )
+        .bind(provider.to_uppercase())
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Err(crate::errors::AppError::Provider(format!(
+                "{provider} API key not configured"
+            )));
+        };
+        let encrypted_key: String = row.try_get("encrypted_key")?;
+        let api_key = decrypt_secret(&encrypted_key)?;
+        let base_url: String = row
+            .try_get::<Option<String>, _>("base_url")?
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| default_provider_base_url(provider).to_string());
+        let model: Option<String> = row.try_get("model")?;
+        let model = model.filter(|value| !value.trim().is_empty()).ok_or_else(|| {
+            crate::errors::AppError::Provider(format!(
+                "{provider} model not configured. Please set it in Settings."
+            ))
+        })?;
+        Ok(ProviderSettings {
+            api_key,
+            base_url,
+            model,
         })
     }
 
@@ -1138,4 +1171,14 @@ fn summarize_usage_rows(rows: &[sqlx::sqlite::SqliteRow]) -> CostSummary {
 
 fn round_cost(value: f64) -> f64 {
     (value * 10000.0).round() / 10000.0
+}
+
+fn default_provider_base_url(provider: &str) -> &'static str {
+    match provider.to_uppercase().as_str() {
+        "DEEPSEEK" => "https://api.deepseek.com",
+        "QWEN_VL" => "https://dashscope.aliyuncs.com/api/v1",
+        "TONGYI" => "https://dashscope.aliyuncs.com/api/v1",
+        "SEEDANCE" => "https://ark.cn-beijing.volces.com/api/v3",
+        _ => "https://api.example.com",
+    }
 }

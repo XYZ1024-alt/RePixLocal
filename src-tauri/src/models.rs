@@ -171,6 +171,24 @@ pub struct TranscriptSegment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderSettings {
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewrittenScene {
+    pub index: i32,
+    pub script_text: String,
+    pub visual_prompt: Option<String>,
+    pub motion_prompt: Option<String>,
+    pub keyframe_path: Option<String>,
+    pub start_ms: Option<i64>,
+    pub end_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptResult {
     pub language: String,
     pub segments: Vec<TranscriptSegment>,
