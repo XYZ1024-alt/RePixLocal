@@ -72,3 +72,18 @@ fn keyring_entry() -> AppResult<Entry> {
 fn secret_error(error: impl std::fmt::Display) -> AppError {
     AppError::Config(format!("secret storage unavailable: {error}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::mask_secret;
+
+    #[test]
+    fn mask_secret_hides_middle_chars() {
+        assert_eq!(mask_secret("sk-abcdefghij"), "*********ghij");
+    }
+
+    #[test]
+    fn mask_secret_short_value() {
+        assert_eq!(mask_secret("ab"), "****");
+    }
+}

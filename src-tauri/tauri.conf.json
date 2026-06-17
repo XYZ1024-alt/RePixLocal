@@ -32,7 +32,17 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
-    "icon": ["icons/icon.ico"]
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "shortDescription": "Local AI video replication desktop app",
+    "longDescription": "RePix Local runs the full five-stage AI video replication pipeline on your machine: transcription, script rewrite, storyboard generation, segment synthesis, and final render.",
+    "copyright": "Copyright © RePix. All rights reserved.",
+    "category": "Video",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
   }
 }

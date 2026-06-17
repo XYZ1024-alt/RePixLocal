@@ -222,3 +222,32 @@ fn http_client() -> AppResult<Client> {
         .build()
         .map_err(|error| AppError::Provider(error.to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_url_host_parses_https() {
+        assert_eq!(
+            extract_url_host("https://cdn.example.com/path/frame.png"),
+            Some("cdn.example.com")
+        );
+    }
+
+    #[test]
+    fn private_hosts_are_rejected() {
+        assert!(is_private_host("localhost"));
+        assert!(is_private_host("127.0.0.1"));
+        assert!(!is_private_host("oss.example.com"));
+    }
+
+    #[test]
+    fn segment_text_includes_motion_and_duration() {
+        assert_eq!(
+            segment_text(5.0, Some("slow zoom in")),
+            "slow zoom in --dur 5"
+        );
+        assert_eq!(segment_text(4.2, None), "--dur 4");
+    }
+}

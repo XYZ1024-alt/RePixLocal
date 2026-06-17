@@ -22,3 +22,23 @@ fn strip_code_fence(content: &str) -> &str {
         .map(str::trim)
         .unwrap_or(rest)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_json_payload;
+
+    #[test]
+    fn parse_plain_json_array() {
+        let value = parse_json_payload(r#"[{"index":0,"text":"hi"}]"#).unwrap();
+        assert!(value.is_array());
+    }
+
+    #[test]
+    fn parse_fenced_json_object() {
+        let value = parse_json_payload(
+            "```json\n{\"scenes\":[{\"index\":1}]}\n```",
+        )
+        .unwrap();
+        assert!(value.get("scenes").and_then(|v| v.as_array()).is_some());
+    }
+}

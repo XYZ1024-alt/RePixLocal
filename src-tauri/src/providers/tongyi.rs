@@ -343,3 +343,35 @@ fn json_headers(api_key: &str) -> reqwest::header::HeaderMap {
     );
     headers
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wan_multimodal_model_detection() {
+        assert!(uses_wan_multimodal_api("wan2.7-image-v1"));
+        assert!(!uses_wan_multimodal_api("wanx-v1"));
+    }
+
+    #[test]
+    fn provider_safe_prompt_filters_subtitle_terms() {
+        let prompt = "A person at a desk. Subtitle text reads hello. Warm lighting.";
+        let safe = provider_safe_prompt(prompt).unwrap();
+        assert!(!safe.to_lowercase().contains("subtitle"));
+        assert!(safe.contains("Warm lighting"));
+    }
+
+    #[test]
+    fn provider_safe_prompt_rejects_all_unsafe_sentences() {
+        let prompt = "Readable text overlay on the frame.";
+        assert!(provider_safe_prompt(prompt).is_err());
+    }
+
+    #[test]
+    fn legacy_size_for_9_16_aspect() {
+        let (size, width, height) = legacy_size_for_aspect("9:16");
+        assert_eq!(size, "720*1280");
+        assert_eq!((width, height), (720, 1280));
+    }
+}

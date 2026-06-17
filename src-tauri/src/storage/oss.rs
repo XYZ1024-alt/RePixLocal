@@ -166,3 +166,29 @@ fn encode_path_segment(segment: &str) -> String {
     }
     encoded
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{encode_path_segment, percent_encode_path, public_object_url};
+
+    #[test]
+    fn percent_encode_path_preserves_slashes() {
+        assert_eq!(
+            percent_encode_path("tasks/id/frame.png"),
+            "tasks/id/frame.png"
+        );
+    }
+
+    #[test]
+    fn encode_path_segment_escapes_spaces() {
+        assert_eq!(encode_path_segment("hello world"), "hello%20world");
+    }
+
+    #[test]
+    fn public_object_url_joins_endpoint_and_key() {
+        assert_eq!(
+            public_object_url("https://oss.example.com", "tasks/a.png"),
+            "https://oss.example.com/tasks/a.png"
+        );
+    }
+}

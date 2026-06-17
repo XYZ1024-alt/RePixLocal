@@ -333,3 +333,61 @@ fn format_srt_timestamp(ms: i64) -> String {
     let millis = ms % 1_000;
     format!("{hours:02}:{minutes:02}:{seconds:02},{millis:03}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ass_color_converts_hex_to_bgr() {
+        assert_eq!(ass_color("#FF8040"), "&H004080FF");
+    }
+
+    #[test]
+    fn cues_skip_empty_lines() {
+        let cues = cues_from_segments(&[
+            TranscriptSegment {
+                start_ms: 0,
+                end_ms: 1000,
+                text: "hello".to_string(),
+            },
+            TranscriptSegment {
+                start_ms: 1000,
+                end_ms: 2000,
+                text: "   ".to_string(),
+            },
+        ]);
+        assert_eq!(cues.len(), 1);
+        assert!((cues[0].start_sec - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn wrap_line_splits_on_spaces() {
+        let wrapped = wrap_line("short line", 20);
+        assert_eq!(wrapped, vec!["short line"]);
+        let long = wrap_line("one two three four five six seven eight", 12);
+        assert!(long.len() > 1);
+    }
+
+    #[tokio::test]
+    async fn build_ass_writes_utf8_bom() {
+        let dir = std::env::temp_dir().join(format!("repix-ass-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join("subs.ass");
+        build_ass(
+            &[SubtitleCue {
+                start_sec: 0.0,
+                end_sec: 1.5,
+                text: "Hello".to_string(),
+            }],
+            &path,
+            &AssStyle::default(),
+        )
+        .await
+        .unwrap();
+        let bytes = tokio::fs::read(&path).await.unwrap();
+        assert_eq!(&bytes[..3], &[0xEF, 0xBB, 0xBF]);
+        assert!(String::from_utf8_lossy(&bytes).contains("Dialogue:"));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+}

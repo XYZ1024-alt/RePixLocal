@@ -7,9 +7,14 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
+    "build:win": "tauri build --target x86_64-pc-windows-msvc",
     "ui:dev": "vite --host 127.0.0.1",
     "ui:build": "vite build",
-    "ui:check": "tsc --noEmit"
+    "ui:check": "tsc --noEmit",
+    "rust:check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "npm run ui:check && npm run rust:test",
+    "check": "npm run ui:check && npm run rust:check && npm run rust:test"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.13",
