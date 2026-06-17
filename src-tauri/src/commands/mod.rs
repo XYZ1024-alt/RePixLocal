@@ -3,8 +3,8 @@ use tauri::State;
 use crate::config::{save, AppConfig};
 use crate::errors::command_error;
 use crate::models::{
-    AppLog, Asset, CreateTaskInput, DashboardSummary, PipelineRun, ProviderCredentialInput, Task,
-    ToolCheck,
+    AppLog, Asset, CreateTaskInput, DashboardSummary, PipelineRun, PipelineStage,
+    ProviderCredentialInput, Task, ToolCheck,
 };
 use crate::providers::{validate_provider_config, ProviderConfig};
 use crate::state::AppState;
@@ -61,6 +61,30 @@ pub async fn list_assets(
     state
         .repo
         .list_assets(&task_id)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn list_all_assets(
+    task_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<Asset>, String> {
+    state
+        .repo
+        .list_all_assets(task_id.as_deref())
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn list_run_stages(
+    run_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<PipelineStage>, String> {
+    state
+        .repo
+        .list_run_stages(&run_id)
         .await
         .map_err(command_error)
 }

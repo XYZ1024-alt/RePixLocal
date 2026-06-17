@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import {
   cancelTask,
@@ -6,10 +6,10 @@ import {
   getDashboardSummary,
   getLatestRun,
   getSettings,
-  listAssets,
+  listAllAssets,
   listLogs,
-  listTasks,
-  startTask
+  listRunStages,
+  listTasks
 } from "./api";
 import { Shell } from "./components/Shell";
 import { DashboardView } from "./views/DashboardView";
@@ -17,97 +17,146 @@ import { TaskWizardView } from "./views/TaskWizardView";
 import { PipelineConsoleView } from "./views/PipelineConsoleView";
 import { AssetLibraryView } from "./views/AssetLibraryView";
 import { SettingsView } from "./views/SettingsView";
-import type { AppLog, Asset, DashboardSummary, PipelineRun, Settings, Task, ToolCheck, ViewKey } from "./types";
-
-const emptySummary: DashboardSummary = {
-  total_tasks: 0,
-  running_tasks: 0,
-  completed_tasks: 0,
-  failed_tasks: 0,
-  canceled_tasks: 0,
-  asset_count: 0,
-  latest_tasks: []
-};
+import { ConsoleDetailPlaceholder } from "./views/ConsoleDetailPlaceholder";
+import type { AppLog, Asset, DashboardSummary, PipelineRun, PipelineStage, Settings, Task, ToolCheck, ViewKey } from "./types";
 
 export function App() {
   const [view, setView] = useState<ViewKey>("dashboard");
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [summary, setSummary] = useState(emptySummary);
   const [selectedTaskId, setSelectedTaskId] = useState("");
-  const [assets, setAssets] = useState<Asset[]>([]);
   const [logs, setLogs] = useState<AppLog[]>([]);
   const [run, setRun] = useState<PipelineRun | null>(null);
+  const [stages, setStages] = useState<PipelineStage[]>([]);
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [settings, setSettings] = useState<Settings>({ workspace_root: "" });
   const [tools, setTools] = useState<ToolCheck[]>([]);
   const [message, setMessage] = useState("");
 
-  async function refresh() {
-    const [nextSummary, nextTasks, nextSettings, nextTools] = await Promise.all([
-      getDashboardSummary(),
+  const loadTaskDetails = useCallback(async (taskId: string) => {
+    if (!taskId) {
+      setLogs([]);
+      setRun(null);
+      setStages([]);
+      return;
+    }
+
+    const [nextLogs, nextRun] = await Promise.all([listLogs(taskId), getLatestRun(taskId)]);
+    setLogs(nextLogs);
+    setRun(nextRun);
+    if (nextRun) {
+      setStages(await listRunStages(nextRun.id));
+      setSelectedRunId(nextRun.id);
+    } else {
+      setStages([]);
+    }
+  }, []);
+
+  const refresh = useCallback(async () => {
+    const [nextTasks, nextSettings, nextTools, nextSummary, nextAssets] = await Promise.all([
       listTasks(),
       getSettings(),
-      checkFfmpeg()
+      checkFfmpeg(),
+      getDashboardSummary(),
+      listAllAssets()
     ]);
-    setSummary(nextSummary);
     setTasks(nextTasks);
     setSettings(nextSettings);
     setTools(nextTools);
-  }
+    setSummary(nextSummary);
+    setAssets(nextAssets);
+
+    const nextSelectedTaskId =
+      nextTasks.some((task) => task.id === selectedTaskId) ? selectedTaskId : (nextTasks[0]?.id ?? "");
+    if (nextSelectedTaskId !== selectedTaskId) {
+      setSelectedTaskId(nextSelectedTaskId);
+    }
+    if (nextSelectedTaskId) {
+      await loadTaskDetails(nextSelectedTaskId);
+    } else {
+      setLogs([]);
+      setRun(null);
+      setStages([]);
+    }
+  }, [loadTaskDetails, selectedTaskId]);
 
   useEffect(() => {
     refresh().catch((error) => setMessage(String(error)));
   }, []);
+
+  useEffect(() => {
+    if ((view !== "console" && view !== "console-detail") || !selectedTaskId) return;
+    const id = window.setInterval(() => {
+      loadTaskDetails(selectedTaskId).catch((error) => setMessage(String(error)));
+    }, 3000);
+    return () => window.clearInterval(id);
+  }, [view, selectedTaskId, loadTaskDetails]);
 
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? tasks[0],
     [tasks, selectedTaskId]
   );
 
-  async function openTask(taskId: string, target: ViewKey) {
+  function navigate(viewKey: ViewKey) {
+    setView(viewKey);
+    if (viewKey !== "console-detail") {
+      setSelectedRunId(null);
+    }
+  }
+
+  async function handleSelectTask(taskId: string) {
     setSelectedTaskId(taskId);
-    await loadTaskDetails(taskId);
-    setView(target);
-  }
-
-  async function loadTaskDetails(taskId: string) {
-    const [nextAssets, nextLogs, nextRun] = await Promise.all([
-      listAssets(taskId),
-      listLogs(taskId),
-      getLatestRun(taskId)
-    ]);
-    setAssets(nextAssets);
-    setLogs(nextLogs);
-    setRun(nextRun);
-  }
-
-  async function runTask(taskId: string) {
-    await startTask(taskId).catch((error) => setMessage(String(error)));
-    await refresh();
     await loadTaskDetails(taskId).catch((error) => setMessage(String(error)));
   }
 
   async function stopTask(taskId: string) {
     await cancelTask(taskId).catch((error) => setMessage(String(error)));
     await refresh();
+    await loadTaskDetails(taskId).catch((error) => setMessage(String(error)));
   }
 
   return (
-    <Shell activeView={view} message={message} onClearMessage={() => setMessage("")} onNavigate={setView}>
-      {message && <ErrorBanner message={message} />}
-      {view === "dashboard" && <DashboardView summary={summary} tasks={tasks} onOpenTask={openTask} onStart={runTask} />}
+    <Shell activeView={view} hasError={Boolean(message)} onNavigate={navigate}>
+      {message && <ErrorBanner message={message} onDismiss={() => setMessage("")} />}
+      {view === "dashboard" && <DashboardView summary={summary} tasks={tasks} />}
       {view === "wizard" && <TaskWizardView onCreated={refresh} onMessage={setMessage} />}
-      {view === "console" && <PipelineConsoleView task={selectedTask} run={run} logs={logs} onCancel={stopTask} />}
-      {view === "library" && <AssetLibraryView tasks={tasks} assets={assets} onSelectTask={openTask} />}
-      {view === "settings" && <SettingsView settings={settings} tools={tools} onRefresh={refresh} onMessage={setMessage} />}
+      {view === "console" && (
+        <PipelineConsoleView
+          logs={logs}
+          run={run}
+          selectedTaskId={selectedTaskId}
+          stages={stages}
+          task={selectedTask}
+          tasks={tasks}
+          onCancel={stopTask}
+          onSelectTask={handleSelectTask}
+        />
+      )}
+      {view === "console-detail" && <ConsoleDetailPlaceholder runId={selectedRunId} />}
+      {view === "library" && (
+        <AssetLibraryView
+          assets={assets}
+          selectedTaskId={selectedTaskId}
+          tasks={tasks}
+          onSelectTask={handleSelectTask}
+        />
+      )}
+      {view === "settings" && (
+        <SettingsView settings={settings} tools={tools} onRefresh={refresh} onMessage={setMessage} />
+      )}
     </Shell>
   );
 }
 
-function ErrorBanner(props: { message: string }) {
+function ErrorBanner(props: { message: string; onDismiss: () => void }) {
   return (
-    <div className="error-banner">
+    <div className="mx-4 mt-3 flex items-center gap-2 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200 lg:mx-6">
       <AlertTriangle size={16} />
-      <span>{props.message}</span>
+      <span className="flex-1">{props.message}</span>
+      <button className="text-xs text-red-100/80 hover:text-red-50" onClick={props.onDismiss} type="button">
+        Dismiss
+      </button>
     </div>
   );
 }

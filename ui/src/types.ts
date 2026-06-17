@@ -1,4 +1,10 @@
-export type ViewKey = "dashboard" | "wizard" | "console" | "library" | "settings";
+export type ViewKey =
+  | "dashboard"
+  | "wizard"
+  | "console"
+  | "console-detail"
+  | "library"
+  | "settings";
 
 export type TaskStatus = "draft" | "running" | "completed" | "failed" | "canceled";
 
@@ -17,6 +23,18 @@ export type PipelineRun = {
   task_id: string;
   status: string;
   current_stage?: string;
+  error?: string;
+  started_at?: string;
+  finished_at?: string;
+};
+
+export type StageStatus = "pending" | "running" | "completed" | "failed" | "canceled";
+
+export type PipelineStage = {
+  id: string;
+  run_id: string;
+  stage_type: string;
+  status: StageStatus;
   error?: string;
   started_at?: string;
   finished_at?: string;
@@ -48,6 +66,8 @@ export type DashboardSummary = {
   completed_tasks: number;
   failed_tasks: number;
   canceled_tasks: number;
+  draft_tasks: number;
+  videos_today: number;
   asset_count: number;
   latest_tasks: Task[];
 };
@@ -78,3 +98,4 @@ export type ProviderCredentialPayload = {
   base_url: string;
   model: string;
 };
+

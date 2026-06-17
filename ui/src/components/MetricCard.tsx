@@ -5,7 +5,8 @@ export function MetricCard(props: {
   icon: ReactNode;
   label: string;
   value: string | number;
-  detail: string;
+  delta?: string;
+  deltaPositive?: boolean;
 }) {
   return (
     <article className={`metric-card ${props.accent}`}>
@@ -13,8 +14,12 @@ export function MetricCard(props: {
         <span className="icon-chip">{props.icon}</span>
         <span>{props.label}</span>
       </div>
-      <strong>{props.value}</strong>
-      <p>{props.detail}</p>
+      <div className="metric-value-row">
+        <strong>{props.value}</strong>
+        {props.delta && (
+          <span className={props.deltaPositive === false ? "metric-delta negative" : "metric-delta"}>{props.delta}</span>
+        )}
+      </div>
       <div className="metric-line" />
     </article>
   );

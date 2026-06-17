@@ -5,6 +5,7 @@ import type {
   CreateTaskPayload,
   DashboardSummary,
   PipelineRun,
+  PipelineStage,
   ProviderCredentialPayload,
   Settings,
   Task,
@@ -53,4 +54,12 @@ export async function checkFfmpeg() {
 
 export async function saveProviderCredential(input: ProviderCredentialPayload) {
   return invoke<void>("save_provider_credential", { input });
+}
+
+export async function listRunStages(runId: string) {
+  return invoke<PipelineStage[]>("list_run_stages", { runId });
+}
+
+export async function listAllAssets(taskId?: string) {
+  return invoke<Asset[]>("list_all_assets", { taskId: taskId ?? null });
 }

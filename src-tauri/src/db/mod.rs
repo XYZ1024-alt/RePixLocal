@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::errors::AppResult;
 use crate::models::{
-    AppLog, Asset, AssetType, CreateTaskInput, DashboardSummary, PipelineRun,
+    AppLog, Asset, AssetType, CreateTaskInput, DashboardSummary, PipelineRun, PipelineStage,
     ProviderCredentialInput, RunStatus, StageStatus, StageType, Task, TaskStatus,
 };
 use crate::secrets::encrypt_secret;
@@ -56,6 +56,8 @@ impl Repository {
             completed_tasks: self.count_tasks(Some("completed")).await?,
             failed_tasks: self.count_tasks(Some("failed")).await?,
             canceled_tasks: self.count_tasks(Some("canceled")).await?,
+            draft_tasks: self.count_tasks(Some("draft")).await?,
+            videos_today: self.count_videos_today().await?,
             asset_count: self.count_assets().await?,
             latest_tasks: self.latest_tasks().await?,
         })
@@ -140,6 +142,31 @@ impl Repository {
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter().map(row_to_asset).collect()
+    }
+
+    pub async fn list_all_assets(&self, task_id: Option<&str>) -> AppResult<Vec<Asset>> {
+        let rows = match task_id {
+            Some(id) => {
+                sqlx::query("SELECT * FROM assets WHERE task_id = ? ORDER BY created_at DESC")
+                    .bind(id)
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+            None => {
+                sqlx::query("SELECT * FROM assets ORDER BY created_at DESC")
+                    .fetch_all(&self.pool)
+                    .await?
+            }
+        };
+        rows.into_iter().map(row_to_asset).collect()
+    }
+
+    pub async fn list_run_stages(&self, run_id: &str) -> AppResult<Vec<PipelineStage>> {
+        let rows = sqlx::query("SELECT * FROM stages WHERE run_id = ? ORDER BY started_at ASC")
+            .bind(run_id)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter().map(row_to_stage).collect()
     }
 
     pub async fn list_logs(&self, task_id: &str) -> AppResult<Vec<AppLog>> {
@@ -235,6 +262,18 @@ impl Repository {
         Ok(count)
     }
 
+    async fn count_videos_today(&self) -> AppResult<i64> {
+        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let count: i64 = sqlx::query(
+            "SELECT COUNT(*) FROM tasks WHERE status = 'completed' AND date(updated_at) = ?",
+        )
+        .bind(&today)
+        .fetch_one(&self.pool)
+        .await?
+        .try_get(0)?;
+        Ok(count)
+    }
+
     async fn latest_tasks(&self) -> AppResult<Vec<Task>> {
         let rows = sqlx::query("SELECT * FROM tasks ORDER BY created_at DESC LIMIT 6")
             .fetch_all(&self.pool)
@@ -280,6 +319,18 @@ fn row_to_asset(row: sqlx::sqlite::SqliteRow) -> AppResult<Asset> {
         mime_type: row.try_get("mime_type")?,
         scene_index: row.try_get("scene_index")?,
         created_at: parse_time(row.try_get::<String, _>("created_at")?)?,
+    })
+}
+
+fn row_to_stage(row: sqlx::sqlite::SqliteRow) -> AppResult<PipelineStage> {
+    Ok(PipelineStage {
+        id: row.try_get("id")?,
+        run_id: row.try_get("run_id")?,
+        stage_type: parse_stage_type(row.try_get::<String, _>("stage_type")?),
+        status: parse_stage_status(row.try_get::<String, _>("status")?),
+        error: row.try_get("error")?,
+        started_at: parse_optional_time(row.try_get("started_at")?)?,
+        finished_at: parse_optional_time(row.try_get("finished_at")?)?,
     })
 }
 
@@ -384,6 +435,16 @@ fn parse_stage_type(value: String) -> StageType {
         "segment_generation" => StageType::SegmentGeneration,
         "final_render" => StageType::FinalRender,
         _ => StageType::TranscriptExtraction,
+    }
+}
+
+fn parse_stage_status(value: String) -> StageStatus {
+    match value.as_str() {
+        "pending" => StageStatus::Pending,
+        "completed" => StageStatus::Completed,
+        "failed" => StageStatus::Failed,
+        "canceled" => StageStatus::Canceled,
+        _ => StageStatus::Running,
     }
 }
 

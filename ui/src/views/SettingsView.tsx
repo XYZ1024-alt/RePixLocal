@@ -12,7 +12,7 @@ export function SettingsView(props: {
   return (
     <div className="settings-grid">
       <section className="panel-card"><h2>Workspace</h2><code>{props.settings.workspace_root}</code></section>
-      <section className="panel-card"><h2><Wrench size={18} /> External Tools</h2><ToolList tools={props.tools} /><button onClick={props.onRefresh}><RefreshCw size={15} /> 重新检测</button></section>
+      <section className="panel-card"><h2><Wrench size={18} /> External Tools</h2><ToolList tools={props.tools} /><button onClick={props.onRefresh}><RefreshCw size={15} /> Re-check</button></section>
       <ProviderForm onMessage={props.onMessage} />
     </div>
   );
@@ -40,7 +40,7 @@ function ProviderForm(props: { onMessage: (value: string) => void }) {
   async function submit() {
     await saveProviderCredential({ provider, label, api_key: apiKey, base_url: baseUrl, model });
     setApiKey("");
-    props.onMessage("Provider 配置已加密保存");
+    props.onMessage("Provider credentials saved");
   }
 
   return (
@@ -53,7 +53,7 @@ function ProviderForm(props: { onMessage: (value: string) => void }) {
         <label>Model<input value={model} onChange={(event) => setModel(event.target.value)} required /></label>
       </div>
       <label>API Key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} required /></label>
-      <button className="primary-button" type="submit">保存密钥</button>
+      <button className="primary-button" type="submit">Save Credentials</button>
     </form>
   );
 }

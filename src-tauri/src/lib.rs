@@ -13,8 +13,8 @@ pub mod workspace;
 
 use commands::{
     cancel_task, check_ffmpeg, create_task, get_dashboard_summary, get_latest_run, get_settings,
-    get_task, list_assets, list_logs, list_tasks, save_provider_credential, start_task,
-    test_provider, update_settings,
+    get_task, list_all_assets, list_assets, list_logs, list_run_stages, list_tasks,
+    save_provider_credential, start_task, test_provider, update_settings,
 };
 use state::AppState;
 
@@ -34,6 +34,8 @@ pub fn run() {
             start_task,
             cancel_task,
             list_assets,
+            list_all_assets,
+            list_run_stages,
             list_logs,
             check_ffmpeg,
             get_settings,

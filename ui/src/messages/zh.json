@@ -1,0 +1,301 @@
+{
+  "nav": {
+    "brand": "RePix",
+    "dashboard": "总览",
+    "newTask": "新建任务",
+    "console": "控制台",
+    "library": "素材库",
+    "apiUsage": "API 用量",
+    "settings": "设置",
+    "docs": "文档",
+    "signOut": "退出登录",
+    "user": "用户"
+  },
+  "shell": {
+    "allSystemsOperational": "系统运行正常"
+  },
+  "metadata": {
+    "title": "RePix",
+    "description": "端到端自动化 AI 视频复刻平台"
+  },
+  "login": {
+    "title": "RePix",
+    "subtitle": "登录以继续",
+    "invalid": "邮箱或密码错误。",
+    "email": "邮箱",
+    "password": "密码",
+    "submit": "登录"
+  },
+  "dashboard": {
+    "title": "总览",
+    "description": "AI 视频复刻平台实时概览",
+    "newTask": "新建任务",
+    "totalTasks": "任务总数",
+    "running": "运行中",
+    "completed": "已完成",
+    "successRate": "成功率",
+    "assetsReady": "{count} 个素材就绪",
+    "livePipelines": "实时流水线",
+    "completedRuns": "已完成运行",
+    "qualitySignal": "质量信号",
+    "trendTitle": "每日视频产出",
+    "sevenDays": "7 天",
+    "statusTitle": "流水线状态",
+    "noTasks": "暂无任务。",
+    "centerLabel": "任务",
+    "queueTitle": "处理队列",
+    "noRuns": "暂无流水线运行。",
+    "pending": "待处理",
+    "apiUsageTitle": "API 预算用量",
+    "provider": "提供方",
+    "calls": "调用次数",
+    "quantity": "数量",
+    "cost": "费用",
+    "usageMeta": "{quantity} 单位 / {calls} 次调用 / {cost}",
+    "noUsage": "暂无 API 用量记录。",
+    "openConsole": "打开控制台"
+  },
+  "console": {
+    "title": "流水线控制台",
+    "listDescription": "所有流水线运行，点击可查看实时进度。",
+    "noRuns": "暂无流水线运行",
+    "empty": "从向导提交任务后，可在这里查看实时进度。",
+    "notStarted": "尚未开始",
+    "backToList": "返回列表",
+    "stages": "阶段",
+    "liveLog": "实时日志",
+    "assetsTitle": "任务素材",
+    "assetsEmpty": "该任务暂无素材。",
+    "assetSigningError": "素材预览签名失败",
+    "costsTitle": "本次任务成本",
+    "costIncomplete": "成本不完整",
+    "noCosts": "暂无成本记录。",
+    "costUsageMeta": "{quantity} {unit} / {calls} 次调用",
+    "unknownCostCalls": "{count} 次调用费用未知",
+    "failedCostCalls": "{count} 次调用失败",
+    "noLogs": "暂无日志。",
+    "streaming": "推送中",
+    "idle": "空闲",
+    "disconnected": "已断开",
+    "stageStatus": {
+      "running": "进行中",
+      "done": "已完成",
+      "failed": "已失败",
+      "queued": "队列中"
+    }
+  },
+  "library": {
+    "title": "媒体与素材库",
+    "description": "已生成的分镜帧、片段、音频和最终成片",
+    "upload": "上传",
+    "empty": "暂无素材。从向导提交任务后即可生成。",
+    "signingError": "素材预览签名失败",
+    "sceneLabel": "场景 {index}",
+    "taskLevel": "任务级",
+    "filters": {
+      "all": "全部素材",
+      "FINAL_VIDEO": "成片",
+      "VIDEO_SEGMENT": "视频片段",
+      "STORYBOARD_FRAME": "分镜图",
+      "AUDIO_TRACK": "音频"
+    }
+  },
+  "assets": {
+    "viewAll": "查看全部（{count}）",
+    "sections": {
+      "images": "图像（分镜帧）",
+      "audio": "音频（配音和背景音乐）",
+      "videos": "视频（最终 MP4）",
+      "documents": "文档"
+    },
+    "types": {
+      "SOURCE_VIDEO": "源视频",
+      "AUDIO_TRACK": "音频",
+      "TRANSCRIPT": "转写稿",
+      "REWRITTEN_SCRIPT": "改写脚本",
+      "STORYBOARD_FRAME": "分镜图",
+      "VIDEO_SEGMENT": "视频片段",
+      "SUBTITLE": "字幕",
+      "FINAL_VIDEO": "成片"
+    }
+  },
+  "wizard": {
+    "title": "新建复刻任务",
+    "description": "配置 AI 视频复刻流水线",
+    "sourceVideo": "源视频",
+    "sourceVideoDesc": "MP4 或 MOV，最大 500MB。转写和音频会通过 faster-whisper 在本地提取。",
+    "dragDrop": "将视频拖放到这里",
+    "clickBrowse": "或点击浏览",
+    "taskTitle": "任务标题",
+    "taskTitlePlaceholder": "例如：山地风光纪录片",
+    "pipelineOptions": "流水线选项",
+    "pipelineOptionsDesc": "配置复刻视频的改写与渲染方式。",
+    "resolution": "分辨率",
+    "aspectRatio": "宽高比",
+    "language": "目标语言",
+    "rewriteTone": "改写语气",
+    "rewriteLength": "改写长度",
+    "voice": "配音声音",
+    "sceneCount": "场景数量",
+    "sourceSubtitleTreatment": "原字幕处理",
+    "sourceSubtitleRegionRatio": "原字幕区域高度（%）",
+    "subtitlePosition": "字幕位置",
+    "unsupportedType": "不支持的文件类型，请使用 MP4 或 MOV。",
+    "tooLarge": "文件超过 500MB 限制。",
+    "selectFirst": "请先选择源视频。",
+    "invalidInput": "输入无效。",
+    "creating": "正在创建任务...",
+    "uploading": "正在上传... {progress}%",
+    "submitting": "正在加入流水线...",
+    "done": "完成，正在跳转...",
+    "createRun": "创建并运行",
+    "cancel": "取消",
+    "steps": {
+      "source": "源视频",
+      "options": "选项",
+      "upload": "上传",
+      "submit": "提交",
+      "done": "完成"
+    },
+    "stepStatus": {
+      "active": "当前步骤",
+      "completed": "已完成",
+      "pending": "待处理"
+    },
+    "options": {
+      "resolution": {
+        "720p": "720p",
+        "1080p": "1080p"
+      },
+      "aspectRatio": {
+        "16:9": "16:9",
+        "9:16": "9:16"
+      },
+      "language": {
+        "zh": "中文",
+        "en": "英文"
+      },
+      "rewriteTone": {
+        "faithful": "忠实原文",
+        "casual": "轻松口语",
+        "professional": "专业稳重",
+        "dramatic": "戏剧化"
+      },
+      "rewriteLength": {
+        "shorter": "更短",
+        "same": "保持长度",
+        "longer": "更长"
+      },
+      "voice": {
+        "female-1": "女声 1",
+        "male-1": "男声 1",
+        "narrator": "旁白"
+      },
+      "sourceSubtitleTreatment": {
+        "blur": "模糊弱化",
+        "none": "不处理"
+      },
+      "subtitlePosition": {
+        "bottom": "底部",
+        "center": "中间",
+        "top": "顶部"
+      }
+    },
+    "errors": {
+      "createResponseMissingUploadData": "创建响应缺少上传信息。",
+      "actionFailed": "{action}失败（{status}）：{detail}",
+      "actionFailedNoDetail": "{action}失败（{status}）。",
+      "uploadFailed": "上传失败（{status}）。",
+      "uploadNetwork": "上传网络错误。",
+      "actions": {
+        "create": "创建任务",
+        "submit": "提交任务"
+      }
+    }
+  },
+  "stages": {
+    "TRANSCRIPT_EXTRACTION": "转写与音频提取",
+    "SCRIPT_REWRITE": "关键帧分析与文案改写",
+    "STORYBOARD_GENERATION": "通义分镜图生成",
+    "SEGMENT_GENERATION": "Seedance 视频片段生成",
+    "FINAL_RENDER": "FFmpeg 成片封装"
+  },
+  "status": {
+    "PENDING": "待处理",
+    "RUNNING": "运行中",
+    "COMPLETED": "已完成",
+    "FAILED": "已失败",
+    "PAUSED": "已暂停",
+    "CANCELLED": "已取消",
+    "GENERATING": "生成中",
+    "READY": "已就绪",
+    "SKIPPED": "已跳过",
+    "RETRYING": "重试中"
+  },
+  "language": {
+    "label": "界面语言",
+    "zh": "中文",
+    "en": "English"
+  },
+  "settings": {
+    "title": "设置",
+    "subtitle": "管理 API 密钥和系统配置",
+    "providerKeys": "API 密钥",
+    "systemSettings": "系统设置",
+    "save": "保存",
+    "saving": "保存中...",
+    "apiKey": "API 密钥",
+    "apiKeyRequired": "请填写 API 密钥",
+    "baseUrl": "Base URL（可选）",
+    "baseUrlHint": "覆盖默认 API 端点",
+    "model": "模型名称",
+    "modelHint": "覆盖默认模型名称",
+    "modelRequired": "请选择模型",
+    "pricingUnknown": "费用未知",
+    "required": "必填",
+    "configured": "已配置",
+    "notConfigured": "未配置",
+    "savedSuccessfully": "保存成功",
+    "failedToSave": "保存失败",
+    "failedToSaveKey": "保存密钥失败，请检查密钥是否有效",
+    "failedToFetchModels": "获取模型列表失败，请检查密钥和网络",
+    "noModelsAvailable": "未找到可用模型",
+    "modelsFetched": "成功获取模型列表",
+    "currentlySaved": "当前已保存：{maskedKey}",
+    "keyChangedWarning": "密钥已修改，请点击「获取可用模型」重新获取模型列表",
+    "fetchModelsFirst": "请先点击「获取可用模型」验证密钥并选择模型",
+    "fetchModelsToSelect": "请先点击「获取可用模型」",
+    "mustFetchModels": "请先获取模型列表，然后从列表中选择模型",
+    "advancedOptions": "高级选项",
+    "providerDesc": {
+      "DEEPSEEK": "使用对话补全进行文案改写",
+      "QWEN_VL": "对源视频关键帧进行视觉分析",
+      "TONGYI": "图生图生成相似画面",
+      "SEEDANCE": "从图像生成视频片段"
+    },
+    "system": {
+      "configuration": "系统配置",
+      "configurationDesc": "配置 Whisper 模型和 FFmpeg 路径",
+      "whisperModel": "Whisper 模型",
+      "whisperHint": "若未缓存，模型将在首次转写时下载",
+      "ffmpegPath": "FFmpeg 路径",
+      "ffmpegHint": "命令或绝对路径（如已在 PATH 中填 \"ffmpeg\"，否则填 \"C:\\ffmpeg\\bin\\ffmpeg.exe\"）",
+      "ffprobePath": "FFprobe 路径",
+      "ffprobeHint": "命令或绝对路径（通常与 ffmpeg 在同一目录）",
+      "saved": "系统设置保存成功",
+      "save": "保存系统设置",
+      "whisperOptions": {
+        "tiny": "Tiny（最快，质量最低）",
+        "base": "Base（推荐）",
+        "small": "Small（均衡）",
+        "medium": "Medium（较慢，质量更好）",
+        "large-v3": "Large-v3（质量最佳，最慢）"
+      }
+    },
+    "fetchModels": "获取可用模型",
+    "fetchingModels": "加载中...",
+    "selectModel": "选择模型",
+    "useCustomModel": "手动输入模型名称",
+    "useProviderModels": "使用官方模型列表"
+  }
+}

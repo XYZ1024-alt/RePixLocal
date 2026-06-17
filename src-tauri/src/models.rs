@@ -76,6 +76,17 @@ pub struct PipelineRun {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineStage {
+    pub id: String,
+    pub run_id: String,
+    pub stage_type: StageType,
+    pub status: StageStatus,
+    pub error: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Asset {
     pub id: String,
     pub task_id: String,
@@ -105,6 +116,8 @@ pub struct DashboardSummary {
     pub completed_tasks: i64,
     pub failed_tasks: i64,
     pub canceled_tasks: i64,
+    pub draft_tasks: i64,
+    pub videos_today: i64,
     pub asset_count: i64,
     pub latest_tasks: Vec<Task>,
 }

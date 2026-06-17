@@ -1,0 +1,301 @@
+{
+  "nav": {
+    "brand": "RePix",
+    "dashboard": "Overview",
+    "newTask": "New Task",
+    "console": "Console",
+    "library": "Asset Library",
+    "apiUsage": "API Usage",
+    "settings": "Settings",
+    "docs": "Docs",
+    "signOut": "Sign out",
+    "user": "User"
+  },
+  "shell": {
+    "allSystemsOperational": "All Systems Operational"
+  },
+  "metadata": {
+    "title": "RePix",
+    "description": "End-to-end automated AI video replication platform"
+  },
+  "login": {
+    "title": "RePix",
+    "subtitle": "Sign in to continue",
+    "invalid": "Invalid email or password.",
+    "email": "Email",
+    "password": "Password",
+    "submit": "Sign in"
+  },
+  "dashboard": {
+    "title": "Overview",
+    "description": "Real-time overview of your AI video replication platform",
+    "newTask": "New Task",
+    "totalTasks": "Total Tasks",
+    "running": "Running",
+    "completed": "Completed",
+    "successRate": "Success Rate",
+    "assetsReady": "{count} assets ready",
+    "livePipelines": "Live pipelines",
+    "completedRuns": "Completed runs",
+    "qualitySignal": "Quality signal",
+    "trendTitle": "Daily Video Output",
+    "sevenDays": "7 Days",
+    "statusTitle": "Pipeline Status",
+    "noTasks": "No tasks yet.",
+    "centerLabel": "tasks",
+    "queueTitle": "Processing Queues",
+    "noRuns": "No pipeline runs yet.",
+    "pending": "Pending",
+    "apiUsageTitle": "API Budget Usage",
+    "provider": "Provider",
+    "calls": "Calls",
+    "quantity": "Quantity",
+    "cost": "Cost",
+    "usageMeta": "{quantity} units / {calls} calls / {cost}",
+    "noUsage": "No API usage recorded yet.",
+    "openConsole": "Open console"
+  },
+  "console": {
+    "title": "Pipeline Console",
+    "listDescription": "All pipeline runs - click one to view live progress.",
+    "noRuns": "No pipeline runs yet",
+    "empty": "Submit a task from the Wizard to see live progress here.",
+    "notStarted": "Not started",
+    "backToList": "Back to list",
+    "stages": "Stages",
+    "liveLog": "Real-time Logs",
+    "assetsTitle": "Task Assets",
+    "assetsEmpty": "No assets for this task yet.",
+    "assetSigningError": "Asset preview signing failed",
+    "costsTitle": "Run Cost",
+    "costIncomplete": "Incomplete cost",
+    "noCosts": "No cost records yet.",
+    "costUsageMeta": "{quantity} {unit} / {calls} calls",
+    "unknownCostCalls": "{count} calls with unknown cost",
+    "failedCostCalls": "{count} failed calls",
+    "noLogs": "No log entries yet.",
+    "streaming": "streaming",
+    "idle": "idle",
+    "disconnected": "disconnected",
+    "stageStatus": {
+      "running": "in progress",
+      "done": "completed",
+      "failed": "failed",
+      "queued": "queued"
+    }
+  },
+  "library": {
+    "title": "Media and Asset Library",
+    "description": "Generated frames, segments, audio and final renders",
+    "upload": "Upload",
+    "empty": "No assets yet. Submit a task from the Wizard to generate some.",
+    "signingError": "Asset preview signing failed",
+    "sceneLabel": "Scene {index}",
+    "taskLevel": "Task-level",
+    "filters": {
+      "all": "All Assets",
+      "FINAL_VIDEO": "Videos",
+      "VIDEO_SEGMENT": "Segments",
+      "STORYBOARD_FRAME": "Images",
+      "AUDIO_TRACK": "Audio"
+    }
+  },
+  "assets": {
+    "viewAll": "View All ({count})",
+    "sections": {
+      "images": "Images (Storyboard Frames)",
+      "audio": "Audio (TTS & BGM)",
+      "videos": "Videos (Final MP4)",
+      "documents": "Documents"
+    },
+    "types": {
+      "SOURCE_VIDEO": "Source Video",
+      "AUDIO_TRACK": "Audio",
+      "TRANSCRIPT": "Transcript",
+      "REWRITTEN_SCRIPT": "Rewritten Script",
+      "STORYBOARD_FRAME": "Storyboard Frame",
+      "VIDEO_SEGMENT": "Video Segment",
+      "SUBTITLE": "Subtitle",
+      "FINAL_VIDEO": "Final Video"
+    }
+  },
+  "wizard": {
+    "title": "Create New Replication Task",
+    "description": "Configure your AI video replication pipeline",
+    "sourceVideo": "Source Video",
+    "sourceVideoDesc": "MP4 or MOV up to 500MB. Transcript and audio are extracted locally with faster-whisper.",
+    "dragDrop": "Drag & drop your video here",
+    "clickBrowse": "or click to browse",
+    "taskTitle": "Task title",
+    "taskTitlePlaceholder": "e.g. Mountain Landscape Documentary",
+    "pipelineOptions": "Pipeline Options",
+    "pipelineOptionsDesc": "How the replica is rewritten and rendered.",
+    "resolution": "Resolution",
+    "aspectRatio": "Aspect ratio",
+    "language": "Language",
+    "rewriteTone": "Rewrite tone",
+    "rewriteLength": "Rewrite length",
+    "voice": "Voice",
+    "sceneCount": "Scene count",
+    "sourceSubtitleTreatment": "Source subtitle treatment",
+    "sourceSubtitleRegionRatio": "Source subtitle band height (%)",
+    "subtitlePosition": "Subtitle position",
+    "unsupportedType": "Unsupported file type - use MP4 or MOV.",
+    "tooLarge": "File exceeds the 500MB limit.",
+    "selectFirst": "Select a source video first.",
+    "invalidInput": "Invalid input.",
+    "creating": "Creating task...",
+    "uploading": "Uploading... {progress}%",
+    "submitting": "Enqueuing pipeline...",
+    "done": "Done - redirecting...",
+    "createRun": "Create & Run",
+    "cancel": "Cancel",
+    "steps": {
+      "source": "Source",
+      "options": "Options",
+      "upload": "Upload",
+      "submit": "Submit",
+      "done": "Done"
+    },
+    "stepStatus": {
+      "active": "active",
+      "completed": "completed",
+      "pending": "pending"
+    },
+    "options": {
+      "resolution": {
+        "720p": "720p",
+        "1080p": "1080p"
+      },
+      "aspectRatio": {
+        "16:9": "16:9",
+        "9:16": "9:16"
+      },
+      "language": {
+        "zh": "Chinese",
+        "en": "English"
+      },
+      "rewriteTone": {
+        "faithful": "Faithful",
+        "casual": "Casual",
+        "professional": "Professional",
+        "dramatic": "Dramatic"
+      },
+      "rewriteLength": {
+        "shorter": "Shorter",
+        "same": "Same length",
+        "longer": "Longer"
+      },
+      "voice": {
+        "female-1": "Female 1",
+        "male-1": "Male 1",
+        "narrator": "Narrator"
+      },
+      "sourceSubtitleTreatment": {
+        "blur": "Blur and soften",
+        "none": "Do not process"
+      },
+      "subtitlePosition": {
+        "bottom": "Bottom",
+        "center": "Center",
+        "top": "Top"
+      }
+    },
+    "errors": {
+      "createResponseMissingUploadData": "Create response is missing upload data.",
+      "actionFailed": "{action} failed ({status}): {detail}",
+      "actionFailedNoDetail": "{action} failed ({status}).",
+      "uploadFailed": "Upload failed ({status}).",
+      "uploadNetwork": "Upload network error.",
+      "actions": {
+        "create": "Create task",
+        "submit": "Submit task"
+      }
+    }
+  },
+  "stages": {
+    "TRANSCRIPT_EXTRACTION": "Transcript & Audio",
+    "SCRIPT_REWRITE": "Keyframe Analysis & Script Rewrite",
+    "STORYBOARD_GENERATION": "Tongyi Storyboard Frames",
+    "SEGMENT_GENERATION": "Seedance Video Segments",
+    "FINAL_RENDER": "FFmpeg Final Render"
+  },
+  "status": {
+    "PENDING": "PENDING",
+    "RUNNING": "RUNNING",
+    "COMPLETED": "COMPLETED",
+    "FAILED": "FAILED",
+    "PAUSED": "PAUSED",
+    "CANCELLED": "CANCELLED",
+    "GENERATING": "GENERATING",
+    "READY": "READY",
+    "SKIPPED": "SKIPPED",
+    "RETRYING": "RETRYING"
+  },
+  "language": {
+    "label": "Language",
+    "zh": "中文",
+    "en": "English"
+  },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Manage API keys and system configuration",
+    "providerKeys": "Provider API Keys",
+    "systemSettings": "System Settings",
+    "save": "Save",
+    "saving": "Saving...",
+    "apiKey": "API Key",
+    "apiKeyRequired": "API key is required",
+    "baseUrl": "Base URL (Optional)",
+    "baseUrlHint": "Override the default API endpoint",
+    "model": "Model",
+    "modelHint": "Override the default model name",
+    "modelRequired": "Model selection is required",
+    "pricingUnknown": "Cost unknown",
+    "required": "Required",
+    "configured": "Configured",
+    "notConfigured": "Not Configured",
+    "savedSuccessfully": "Saved successfully",
+    "failedToSave": "Failed to save",
+    "failedToSaveKey": "Failed to save key, please check if the key is valid",
+    "failedToFetchModels": "Failed to fetch models, please check your key and network",
+    "noModelsAvailable": "No models available",
+    "modelsFetched": "Successfully fetched model list",
+    "currentlySaved": "Currently saved: {maskedKey}",
+    "keyChangedWarning": "Key has been modified, please click 'Fetch Available Models' to refresh the model list",
+    "fetchModelsFirst": "Please click 'Fetch Available Models' to verify your key and select a model",
+    "fetchModelsToSelect": "Please click 'Fetch Available Models' first",
+    "mustFetchModels": "Please fetch the model list first, then select a model from the list",
+    "advancedOptions": "Advanced Options",
+    "providerDesc": {
+      "DEEPSEEK": "Script rewriting with chat completions",
+      "QWEN_VL": "Visual analysis of source video keyframes",
+      "TONGYI": "Image-to-image generation for similar frames",
+      "SEEDANCE": "Video segment generation from images"
+    },
+    "system": {
+      "configuration": "System Configuration",
+      "configurationDesc": "Configure Whisper model and FFmpeg paths",
+      "whisperModel": "Whisper Model",
+      "whisperHint": "Model will be downloaded on first transcription if not cached",
+      "ffmpegPath": "FFmpeg Path",
+      "ffmpegHint": "Command or absolute path (e.g., \"ffmpeg\" if in PATH, or \"C:\\ffmpeg\\bin\\ffmpeg.exe\")",
+      "ffprobePath": "FFprobe Path",
+      "ffprobeHint": "Command or absolute path (usually in same directory as ffmpeg)",
+      "saved": "System settings saved successfully",
+      "save": "Save System Settings",
+      "whisperOptions": {
+        "tiny": "Tiny (fastest, lowest quality)",
+        "base": "Base (recommended)",
+        "small": "Small (balanced)",
+        "medium": "Medium (slower, better quality)",
+        "large-v3": "Large-v3 (best quality, slowest)"
+      }
+    },
+    "fetchModels": "Fetch Available Models",
+    "fetchingModels": "Loading...",
+    "selectModel": "Select a model",
+    "useCustomModel": "Enter custom model name",
+    "useProviderModels": "Use provider model list"
+  }
+}

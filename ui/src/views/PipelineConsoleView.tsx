@@ -1,77 +1,191 @@
-import { CheckCircle2, Circle, Play, Square } from "lucide-react";
+import { CheckCircle2, Circle, Loader2, Pause, Play, XCircle } from "lucide-react";
+import { useState } from "react";
 import { EmptyState } from "../components/EmptyState";
-import { StatusPill } from "../components/StatusPill";
-import type { AppLog, PipelineRun, Task } from "../types";
+import { TaskPicker } from "../components/TaskPicker";
+import { SCENIC_GRADIENT } from "../constants";
+import type { AppLog, PipelineRun, PipelineStage, Task } from "../types";
 
-const stages = ["transcript_extraction", "script_rewrite", "storyboard_generation", "segment_generation", "final_render"];
+type ConsoleTab = "logs" | "metrics";
+type StageUiStatus = "completed" | "in_progress" | "pending" | "failed";
 
 export function PipelineConsoleView(props: {
   logs: AppLog[];
   run: PipelineRun | null;
+  stages: PipelineStage[];
   task?: Task;
+  tasks: Task[];
+  selectedTaskId: string;
+  onSelectTask: (taskId: string) => void;
   onCancel: (taskId: string) => void;
 }) {
-  if (!props.task) {
-    return <EmptyState title="未选择任务" detail="从 Dashboard 选择一个任务查看流水线状态。" />;
-  }
+  const [tab, setTab] = useState<ConsoleTab>("logs");
+  const pipelineId = props.run?.id ?? "—";
+  const status = props.run?.status ?? props.task?.status ?? "—";
+  const startedAt = props.run?.started_at ? formatDateTime(props.run.started_at) : "—";
+
+  const displayLogs = props.logs.map((log) => `[${formatTime(log.created_at)}] ${log.message}`);
+
   return (
-    <div className="console-layout">
-      <section className="panel-card timeline-panel">
-        <ConsoleHeader task={props.task} onCancel={props.onCancel} />
-        {stages.map((stage) => <StageLine active={props.run?.current_stage === stage} key={stage} stage={stage} />)}
+    <div className="console-layout-v2">
+      <section className="panel-card console-steps-panel">
+        <TaskPicker
+          selectedTaskId={props.selectedTaskId}
+          tasks={props.tasks}
+          onSelectTask={props.onSelectTask}
+        />
+        <ConsoleHeader
+          pipelineId={pipelineId}
+          startedAt={startedAt}
+          status={status}
+          onCancel={() => props.task && props.onCancel(props.task.id)}
+        />
+        <div className="console-tabs">
+          <button className={tab === "logs" ? "tab-btn active" : "tab-btn"} onClick={() => setTab("logs")} type="button">
+            Live Logs
+          </button>
+          <button className={tab === "metrics" ? "tab-btn active" : "tab-btn"} onClick={() => setTab("metrics")} type="button">
+            Metrics
+          </button>
+        </div>
+        {props.stages.length === 0 ? (
+          <EmptyState message="No pipeline stages yet" />
+        ) : (
+          props.stages.map((stage, index) => (
+            <StageLine
+              index={index + 1}
+              key={stage.id}
+              label={stageLabel(stage.stage_type)}
+              status={mapStageStatus(stage.status)}
+            />
+          ))
+        )}
       </section>
-      <section className="console-main">
-        <VideoPreview title="Original Video" value={props.task.source_path} />
-        <VideoPreview title="Recreated Video" value="最终视频尚未生成" />
-        <LogPanel logs={props.logs} run={props.run} />
+
+      <section className="console-center">
+        <VideoPlayer label="Original Video" subtitle="—" />
+        <VideoPlayer label="Recreated Video (Preview)" subtitle="—" />
       </section>
+
+      <aside className="panel-card console-log-rail">
+        {tab === "logs" ? (
+          <>
+            <h2>Real-time Logs</h2>
+            <div className="log-scroll">
+              {displayLogs.length === 0 ? (
+                <EmptyState message="No logs yet" />
+              ) : (
+                displayLogs.map((line, i) => (
+                  <div className="log-line" key={i}>
+                    {line}
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <h2>Metrics</h2>
+            <EmptyState message="Runtime metrics not available" />
+          </>
+        )}
+      </aside>
     </div>
   );
 }
 
-function ConsoleHeader(props: { task: Task; onCancel: (taskId: string) => void }) {
+function ConsoleHeader(props: {
+  pipelineId: string;
+  status: string;
+  startedAt: string;
+  onCancel: () => void;
+}) {
   return (
-    <div className="console-header">
-      <div><p className="eyebrow">Pipeline</p><h2>{props.task.title}</h2></div>
-      <StatusPill status={props.task.status} />
-      <button onClick={() => props.onCancel(props.task.id)}><Square size={14} /> Cancel</button>
+    <div className="console-header-v2">
+      <div>
+        <p className="eyebrow">Pipeline</p>
+        <h2>#{props.pipelineId}</h2>
+        <small>Started {props.startedAt}</small>
+      </div>
+      <span className={`status-pill ${props.status}`}>{props.status}</span>
+      <button onClick={props.onCancel} type="button">
+        Cancel
+      </button>
     </div>
   );
 }
 
-function StageLine(props: { active: boolean; stage: string }) {
+function StageLine(props: { index: number; label: string; status: StageUiStatus }) {
+  const Icon =
+    props.status === "completed"
+      ? CheckCircle2
+      : props.status === "in_progress"
+        ? Loader2
+        : props.status === "failed"
+          ? XCircle
+          : Circle;
+  const statusLabel =
+    props.status === "completed"
+      ? "Completed"
+      : props.status === "in_progress"
+        ? "In Progress"
+        : props.status === "failed"
+          ? "Failed"
+          : "Pending";
+
   return (
-    <div className={props.active ? "stage-line active" : "stage-line"}>
-      {props.active ? <CheckCircle2 size={18} /> : <Circle size={18} />}
-      <div><strong>{stageLabel(props.stage)}</strong><span>{props.active ? "当前阶段" : "等待真实执行状态"}</span></div>
+    <div className={`stage-line-v2 ${props.status}`}>
+      <span className="stage-num">{props.index}</span>
+      <Icon className={props.status === "in_progress" ? "spin" : ""} size={18} />
+      <div>
+        <strong>{props.label}</strong>
+        <span>{statusLabel}</span>
+      </div>
     </div>
   );
 }
 
-function VideoPreview(props: { title: string; value: string }) {
+function VideoPlayer(props: { label: string; subtitle: string }) {
   return (
-    <article className="panel-card video-panel">
-      <h2>{props.title}</h2>
-      <div className="video-surface"><Play size={28} /><span>{props.value}</span></div>
+    <article className="panel-card video-player-card">
+      <h2>{props.label}</h2>
+      <div className="video-player" style={{ background: SCENIC_GRADIENT }}>
+        <button className="play-btn" type="button">
+          <Play size={22} fill="currentColor" />
+        </button>
+      </div>
+      <div className="player-controls">
+        <Pause size={14} />
+        <div className="player-track">
+          <span className="player-progress" style={{ width: "0%" }} />
+        </div>
+        <small>{props.subtitle}</small>
+      </div>
     </article>
   );
 }
 
-function LogPanel(props: { logs: AppLog[]; run: PipelineRun | null }) {
-  return (
-    <article className="panel-card log-panel">
-      <h2>Real-time Logs</h2>
-      {props.run?.error && <div className="log-line error">[{props.run.status}] {props.run.error}</div>}
-      {props.logs.length === 0 && <EmptyState title="暂无日志" detail="任务运行后会显示数据库中的真实日志。" />}
-      {props.logs.map((log) => <div className={`log-line ${log.level}`} key={log.id}>[{formatTime(log.created_at)}] {log.message}</div>)}
-    </article>
-  );
+function stageLabel(stageType: string) {
+  const labels: Record<string, string> = {
+    transcript_extraction: "Transcript Extraction",
+    script_rewrite: "Script Rewrite",
+    storyboard_generation: "Storyboard Generation",
+    segment_generation: "Segment Generation",
+    final_render: "Final Render"
+  };
+  return labels[stageType] ?? stageType;
 }
 
-function stageLabel(stage: string) {
-  return stage.replace(/_/g, " ");
+function mapStageStatus(status: string): StageUiStatus {
+  if (status === "completed") return "completed";
+  if (status === "running") return "in_progress";
+  if (status === "failed" || status === "canceled") return "failed";
+  return "pending";
 }
 
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString();
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString();
 }
