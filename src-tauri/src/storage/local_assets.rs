@@ -1,12 +1,21 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use serde_json::{json, Value};
 use tokio::fs;
 use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{Asset, AssetStatus, AssetType};
 use crate::workspace::Workspace;
+
+const MINIMAL_PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+    0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC, 0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+    0x44, 0xAE, 0x42, 0x60, 0x82,
+];
 
 #[derive(Debug, Clone)]
 pub struct AssetManager {
@@ -24,7 +33,94 @@ impl AssetManager {
         self.workspace.create_task_layout(task_id).await?;
         let target = self.source_target(task_id, &source)?;
         fs::copy(&source, &target).await?;
-        Ok(source_asset(task_id, target))
+        Ok(new_asset(
+            task_id,
+            None,
+            AssetType::SourceVideo,
+            target,
+            Some("video/*".to_string()),
+            None,
+        ))
+    }
+
+    pub fn audio_path(&self, task_id: &str) -> PathBuf {
+        self.workspace
+            .task_dir(task_id)
+            .join("audio")
+            .join("audio.wav")
+    }
+
+    pub fn keyframe_path(&self, task_id: &str, index: i32) -> PathBuf {
+        self.workspace
+            .task_dir(task_id)
+            .join("keyframes")
+            .join(format!("frame_{index}.png"))
+    }
+
+    pub fn frame_path(&self, task_id: &str, index: i32) -> PathBuf {
+        self.workspace
+            .task_dir(task_id)
+            .join("frames")
+            .join(format!("scene_{index}.png"))
+    }
+
+    pub fn segment_path(&self, task_id: &str, index: i32) -> PathBuf {
+        self.workspace
+            .task_dir(task_id)
+            .join("segments")
+            .join(format!("scene_{index}.mp4"))
+    }
+
+    pub fn final_path(&self, task_id: &str) -> PathBuf {
+        self.workspace
+            .task_dir(task_id)
+            .join("final")
+            .join("output.mp4")
+    }
+
+    pub fn subtitle_path(&self, task_id: &str) -> PathBuf {
+        self.workspace
+            .task_dir(task_id)
+            .join("subtitles")
+            .join("transcript.json")
+    }
+
+    pub async fn find_source_video(&self, task_id: &str) -> AppResult<PathBuf> {
+        let source_dir = self.workspace.task_dir(task_id).join("source");
+        let mut entries = fs::read_dir(&source_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            if entry.file_type().await?.is_file() {
+                return Ok(entry.path());
+            }
+        }
+        Err(AppError::Workflow(format!(
+            "no source video found for task {task_id}"
+        )))
+    }
+
+    pub async fn write_minimal_png(&self, path: &Path) -> AppResult<()> {
+        ensure_parent(path).await?;
+        fs::write(path, MINIMAL_PNG).await?;
+        Ok(())
+    }
+
+    pub async fn write_mock_wav(&self, path: &Path) -> AppResult<()> {
+        ensure_parent(path).await?;
+        fs::write(path, minimal_wav_bytes()).await?;
+        Ok(())
+    }
+
+    pub async fn write_subtitle_json(&self, path: &Path, segments: &Value) -> AppResult<()> {
+        ensure_parent(path).await?;
+        let body = serde_json::to_vec_pretty(segments)?;
+        fs::write(path, body).await?;
+        Ok(())
+    }
+
+    pub async fn copy_file(&self, source: &Path, target: &Path) -> AppResult<()> {
+        ensure_parent(target).await?;
+        fs::copy(source, target).await?;
+        Ok(())
     }
 
     fn source_target(&self, task_id: &str, source: &Path) -> AppResult<PathBuf> {
@@ -42,6 +138,13 @@ impl AssetManager {
     }
 }
 
+async fn ensure_parent(path: &Path) -> AppResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+    Ok(())
+}
+
 async fn validate_readable_file(path: &Path) -> AppResult<()> {
     let metadata = fs::metadata(path).await?;
     if metadata.is_file() {
@@ -53,16 +156,89 @@ async fn validate_readable_file(path: &Path) -> AppResult<()> {
     )))
 }
 
-fn source_asset(task_id: &str, path: PathBuf) -> Asset {
+fn new_asset(
+    task_id: &str,
+    run_id: Option<&str>,
+    asset_type: AssetType,
+    path: PathBuf,
+    mime_type: Option<String>,
+    scene_index: Option<i32>,
+) -> Asset {
     Asset {
         id: Uuid::new_v4().to_string(),
         task_id: task_id.to_string(),
-        run_id: None,
-        asset_type: AssetType::SourceVideo,
+        run_id: run_id.map(str::to_string),
+        asset_type,
         path: path.to_string_lossy().to_string(),
-        mime_type: Some("video/*".to_string()),
-        scene_index: None,
+        mime_type,
+        scene_index,
         status: Some(AssetStatus::Ready),
         created_at: Utc::now(),
     }
+}
+
+pub fn asset_for_path(
+    task_id: &str,
+    run_id: &str,
+    asset_type: AssetType,
+    path: PathBuf,
+    mime_type: &str,
+    scene_index: Option<i32>,
+) -> Asset {
+    new_asset(
+        task_id,
+        Some(run_id),
+        asset_type,
+        path,
+        Some(mime_type.to_string()),
+        scene_index,
+    )
+}
+
+pub fn mock_transcript_segments() -> Value {
+    json!([
+        {
+            "startMs": 0,
+            "endMs": 5000,
+            "text": "Mock transcript line one."
+        },
+        {
+            "startMs": 5000,
+            "endMs": 10000,
+            "text": "Mock transcript line two."
+        },
+        {
+            "startMs": 10000,
+            "endMs": 15000,
+            "text": "Mock transcript line three."
+        }
+    ])
+}
+
+fn minimal_wav_bytes() -> Vec<u8> {
+    let sample_rate = 16_000u32;
+    let channels = 1u16;
+    let bits_per_sample = 16u16;
+    let num_samples = 1_600u32;
+    let byte_rate = sample_rate * channels as u32 * bits_per_sample as u32 / 8;
+    let block_align = channels * bits_per_sample / 8;
+    let data_size = num_samples * block_align as u32;
+    let chunk_size = 36 + data_size;
+
+    let mut bytes = Vec::with_capacity((44 + data_size) as usize);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&chunk_size.to_le_bytes());
+    bytes.extend_from_slice(b"WAVE");
+    bytes.extend_from_slice(b"fmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&channels.to_le_bytes());
+    bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    bytes.extend_from_slice(&byte_rate.to_le_bytes());
+    bytes.extend_from_slice(&block_align.to_le_bytes());
+    bytes.extend_from_slice(&bits_per_sample.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_size.to_le_bytes());
+    bytes.resize(bytes.len() + data_size as usize, 0);
+    bytes
 }

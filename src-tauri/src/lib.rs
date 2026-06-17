@@ -62,6 +62,5 @@ async fn initialize_state() -> errors::AppResult<AppState> {
     let config = config::load_or_create(&workspace).await?;
     let repo = db::Repository::initialize(&workspace).await?;
     let assets = storage::local_assets::AssetManager::new(workspace.clone());
-    let ffmpeg = media::ffmpeg::FfmpegRunner::detect();
-    Ok(AppState::new(workspace, config, repo, assets, ffmpeg))
+    Ok(AppState::new(workspace, config, repo, assets))
 }

@@ -158,7 +158,7 @@ pub async fn list_logs(task_id: String, state: State<'_, AppState>) -> Result<Ve
 
 #[tauri::command]
 pub async fn check_ffmpeg(state: State<'_, AppState>) -> Result<Vec<ToolCheck>, String> {
-    Ok(state.ffmpeg.check_tools())
+    Ok(state.ffmpeg.check_tools().await)
 }
 
 #[tauri::command]
@@ -174,7 +174,10 @@ pub async fn update_settings(
     save(&state.workspace, &input)
         .await
         .map_err(command_error)?;
-    *state.config.write().await = input.clone();
+    {
+        let mut config = state.config.write().await;
+        *config = input.clone();
+    }
     Ok(input)
 }
 

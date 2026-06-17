@@ -10,6 +10,14 @@ pub struct AppConfig {
     pub ffmpeg_path: Option<String>,
     pub ffprobe_path: Option<String>,
     pub asr_model: Option<String>,
+    #[serde(default = "default_mock_providers")]
+    pub mock_providers: bool,
+    pub whisper_bin: Option<String>,
+    pub whisper_model_dir: Option<String>,
+}
+
+fn default_mock_providers() -> bool {
+    true
 }
 
 impl AppConfig {
@@ -19,6 +27,9 @@ impl AppConfig {
             ffmpeg_path: None,
             ffprobe_path: None,
             asr_model: Some("base".to_string()),
+            mock_providers: true,
+            whisper_bin: None,
+            whisper_model_dir: None,
         }
     }
 }

@@ -10,8 +10,8 @@ use crate::models::{
     AppLog, Asset, AssetStatus, AssetType, CostSummary, CreateTaskInput, DashboardData,
     DashboardStats, ProviderCostSummary, ProviderCredentialConfig, ProviderCredentialInput,
     ProviderCredentialView, QueueItem, RunDetail, RunDetailLog, RunDetailStage, RunListItem,
-    TrendPoint, UsageItem, DashboardSummary, PipelineRun, PipelineStage, RunStatus, StageStatus,
-    StageType, Task, TaskStatus,
+    Scene, TrendPoint, UsageItem, DashboardSummary, PipelineRun, PipelineStage, RunStatus,
+    StageStatus, StageType, Task, TaskStatus,
 };
 use crate::secrets::{decrypt_secret, encrypt_secret, mask_secret};
 use crate::workflow::stages::ordered_stages;
@@ -311,6 +311,100 @@ impl Repository {
             .await?;
         self.update_run_stage(run_id, Some(stage), RunStatus::Failed, Some(error))
             .await
+    }
+
+    pub async fn complete_stage(&self, run_id: &str, stage: StageType) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE stages SET status = ?, finished_at = ? WHERE run_id = ? AND stage_type = ?",
+        )
+        .bind(stage_status_text(&StageStatus::Completed))
+        .bind(Utc::now().to_rfc3339())
+        .bind(run_id)
+        .bind(stage_type_text(&stage))
+        .execute(&self.pool)
+        .await?;
+        self.update_run_stage(run_id, Some(stage), RunStatus::Running, None)
+            .await
+    }
+
+    pub async fn complete_run(&self, run_id: &str, task_id: &str) -> AppResult<()> {
+        self.update_run_stage(run_id, None, RunStatus::Completed, None)
+            .await?;
+        self.update_task_status(task_id, TaskStatus::Completed)
+            .await
+    }
+
+    pub async fn insert_scene(&self, scene: &Scene) -> AppResult<()> {
+        sqlx::query(
+            "INSERT INTO scenes (id, task_id, run_id, scene_index, script, prompt, visual_prompt, motion_prompt, metadata_json, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&scene.id)
+        .bind(&scene.task_id)
+        .bind(&scene.run_id)
+        .bind(scene.scene_index)
+        .bind(&scene.script_text)
+        .bind(scene.visual_prompt.as_deref())
+        .bind(scene.visual_prompt.as_deref())
+        .bind(scene.motion_prompt.as_deref())
+        .bind(
+            scene
+                .metadata_json
+                .as_ref()
+                .map(|value| value.to_string()),
+        )
+        .bind(scene.created_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_scenes(&self, run_id: &str) -> AppResult<Vec<Scene>> {
+        let rows = sqlx::query(
+            "SELECT * FROM scenes WHERE run_id = ? ORDER BY scene_index ASC",
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_scene).collect()
+    }
+
+    pub async fn count_scenes(&self, run_id: &str) -> AppResult<i64> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scenes WHERE run_id = ?")
+            .bind(run_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count)
+    }
+
+    pub async fn insert_api_usage_log(
+        &self,
+        provider: &str,
+        task_id: Option<&str>,
+        run_id: Option<&str>,
+        endpoint: &str,
+        unit: &str,
+        quantity: f64,
+        cost_usd: Option<f64>,
+        success: bool,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "INSERT INTO api_usage_logs (id, provider, task_id, run_id, endpoint, unit, quantity, cost_usd, success, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(provider)
+        .bind(task_id)
+        .bind(run_id)
+        .bind(endpoint)
+        .bind(unit)
+        .bind(quantity)
+        .bind(cost_usd)
+        .bind(if success { 1 } else { 0 })
+        .bind(Utc::now().to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn list_assets(&self, task_id: &str) -> AppResult<Vec<Asset>> {
@@ -644,6 +738,20 @@ async fn run_pending_migrations(pool: &SqlitePool) -> AppResult<()> {
             .execute(pool)
             .await?;
     }
+
+    let scenes_extended: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('scenes') WHERE name = 'visual_prompt'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if scenes_extended == 0 {
+        pool.execute(include_str!("migrations/0003_scenes_extend.sql"))
+            .await?;
+        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)")
+            .bind(Utc::now().to_rfc3339())
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -706,6 +814,27 @@ fn row_to_asset(row: sqlx::sqlite::SqliteRow) -> AppResult<Asset> {
         scene_index: row.try_get("scene_index")?,
         status: status.map(parse_asset_status),
         created_at: parse_time(row.try_get::<String, _>("created_at")?)?,
+    })
+}
+
+fn row_to_scene(row: sqlx::sqlite::SqliteRow) -> AppResult<Scene> {
+    let metadata_raw: Option<String> = row.try_get("metadata_json")?;
+    let metadata_json = metadata_raw
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()?;
+    Ok(Scene {
+        id: row.try_get("id")?,
+        task_id: row.try_get("task_id")?,
+        run_id: row.try_get("run_id")?,
+        scene_index: row.try_get("scene_index")?,
+        script_text: row.try_get("script")?,
+        visual_prompt: row
+            .try_get::<Option<String>, _>("visual_prompt")?
+            .or_else(|| row.try_get("prompt").ok()),
+        motion_prompt: row.try_get("motion_prompt")?,
+        metadata_json,
+        created_at: parse_time(row.try_get("created_at")?)?,
     })
 }
 

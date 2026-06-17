@@ -12,7 +12,7 @@ use crate::workspace::Workspace;
 #[derive(Debug)]
 pub struct AppState {
     pub workspace: Workspace,
-    pub config: RwLock<AppConfig>,
+    pub config: Arc<RwLock<AppConfig>>,
     pub repo: Arc<Repository>,
     pub workflow: WorkflowEngine,
     pub ffmpeg: Arc<FfmpegRunner>,
@@ -24,15 +24,15 @@ impl AppState {
         config: AppConfig,
         repo: Repository,
         assets: AssetManager,
-        ffmpeg: FfmpegRunner,
     ) -> Self {
+        let config = Arc::new(RwLock::new(config));
         let repo = Arc::new(repo);
         let assets = Arc::new(assets);
-        let ffmpeg = Arc::new(ffmpeg);
-        let workflow = WorkflowEngine::new(repo.clone(), assets, ffmpeg.clone());
+        let ffmpeg = Arc::new(FfmpegRunner::new(config.clone()));
+        let workflow = WorkflowEngine::new(repo.clone(), assets, ffmpeg.clone(), config.clone());
         Self {
             workspace,
-            config: RwLock::new(config),
+            config,
             repo,
             workflow,
             ffmpeg,

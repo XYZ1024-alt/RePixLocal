@@ -98,6 +98,19 @@ pub struct PipelineStage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Scene {
+    pub id: String,
+    pub task_id: String,
+    pub run_id: Option<String>,
+    pub scene_index: i32,
+    pub script_text: String,
+    pub visual_prompt: Option<String>,
+    pub motion_prompt: Option<String>,
+    pub metadata_json: Option<Value>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Asset {
     pub id: String,
     pub task_id: String,

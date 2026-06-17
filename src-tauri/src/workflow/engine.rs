@@ -1,19 +1,23 @@
 use std::sync::Arc;
 
 use tauri::AppHandle;
+use tokio::sync::RwLock;
 
+use crate::config::AppConfig;
 use crate::db::Repository;
-use crate::errors::{AppError, AppResult};
+use crate::errors::AppResult;
 use crate::media::ffmpeg::FfmpegRunner;
-use crate::models::{PipelineRun, StageType, TaskStatus};
+use crate::models::{PipelineRun, TaskStatus};
 use crate::storage::local_assets::AssetManager;
 use crate::workflow::events::{emit_pipeline_event, PipelineEvent};
+use crate::workflow::runner::PipelineRunner;
 
 #[derive(Debug, Clone)]
 pub struct WorkflowEngine {
     repo: Arc<Repository>,
     assets: Arc<AssetManager>,
     ffmpeg: Arc<FfmpegRunner>,
+    config: Arc<RwLock<AppConfig>>,
 }
 
 impl WorkflowEngine {
@@ -21,11 +25,13 @@ impl WorkflowEngine {
         repo: Arc<Repository>,
         assets: Arc<AssetManager>,
         ffmpeg: Arc<FfmpegRunner>,
+        config: Arc<RwLock<AppConfig>>,
     ) -> Self {
         Self {
             repo,
             assets,
             ffmpeg,
+            config,
         }
     }
 
@@ -51,7 +57,22 @@ impl WorkflowEngine {
                 status: "RUNNING".to_string(),
             },
         );
-        self.run_first_stage(task_id, &run, app).await?;
+
+        let runner = PipelineRunner::new(
+            self.repo.clone(),
+            self.assets.clone(),
+            self.ffmpeg.clone(),
+            self.config.clone(),
+        );
+        let app_handle = app.clone();
+        let run_id = run.id.clone();
+        let task_id_owned = task_id.to_string();
+        tokio::spawn(async move {
+            if let Err(error) = runner.run(&task_id_owned, &run_id, &app_handle).await {
+                tracing::warn!("pipeline run {run_id} failed: {error}");
+            }
+        });
+
         Ok(run)
     }
 
@@ -85,75 +106,6 @@ impl WorkflowEngine {
         self.repo
             .get_task(task_id)
             .await?
-            .ok_or_else(|| AppError::Workflow(format!("task not found: {task_id}")))
-    }
-
-    async fn run_first_stage(
-        &self,
-        task_id: &str,
-        run: &PipelineRun,
-        app: &AppHandle,
-    ) -> AppResult<()> {
-        self.repo
-            .start_stage(&run.id, StageType::TranscriptExtraction)
-            .await?;
-        emit_pipeline_event(
-            app,
-            PipelineEvent::Stage {
-                run_id: run.id.clone(),
-                stage: "TRANSCRIPT_EXTRACTION".to_string(),
-                status: "RUNNING".to_string(),
-            },
-        );
-        let error = self.validate_media_tools();
-        self.repo
-            .fail_run(&run.id, StageType::TranscriptExtraction, &error)
-            .await?;
-        self.repo
-            .update_task_status(task_id, TaskStatus::Failed)
-            .await?;
-        self.repo
-            .insert_log(Some(task_id), Some(&run.id), "error", &error)
-            .await?;
-        emit_pipeline_event(
-            app,
-            PipelineEvent::Stage {
-                run_id: run.id.clone(),
-                stage: "TRANSCRIPT_EXTRACTION".to_string(),
-                status: "FAILED".to_string(),
-            },
-        );
-        emit_pipeline_event(
-            app,
-            PipelineEvent::Run {
-                run_id: run.id.clone(),
-                task_id: task_id.to_string(),
-                status: "FAILED".to_string(),
-            },
-        );
-        emit_pipeline_event(
-            app,
-            PipelineEvent::Log {
-                run_id: run.id.clone(),
-                task_id: Some(task_id.to_string()),
-                level: "ERROR".to_string(),
-                message: error.clone(),
-            },
-        );
-        Err(AppError::Workflow(error))
-    }
-
-    fn validate_media_tools(&self) -> String {
-        let missing: Vec<String> = self
-            .ffmpeg
-            .check_tools()
-            .into_iter()
-            .filter(|tool| !tool.found)
-            .map(|tool| tool.name)
-            .collect();
-        if missing.is_empty() {
-            return "transcript extraction is not implemented yet".to_string();
-        }
-        format!("missing external tools: {}", missing.join(", "))
+            .ok_or_else(|| crate::errors::AppError::Workflow(format!("task not found: {task_id}")))
     }
 }
