@@ -325,7 +325,7 @@ fn contains_unsafe_prompt_term(sentence: &str) -> bool {
 }
 
 fn http_client() -> AppResult<reqwest::Client> {
-    crate::providers::http_client::build_http_client(120)
+    crate::providers::http_client::build_http_client_direct(180)
 }
 
 fn json_headers(api_key: &str) -> reqwest::header::HeaderMap {

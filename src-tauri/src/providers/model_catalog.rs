@@ -1,7 +1,9 @@
 use serde_json::Value;
 
 use crate::errors::{AppError, AppResult};
-use crate::providers::http_client::{build_http_client, format_http_error};
+use crate::providers::http_client::{
+    build_http_client, build_http_client_direct, format_http_error,
+};
 use crate::models::{ProviderListingCredentials, ProviderModelOption};
 
 const DASHSCOPE_MODELS_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1/models";
@@ -147,7 +149,11 @@ async fn fetch_seedance_models(creds: &ProviderListingCredentials) -> AppResult<
 }
 
 async fn get_models_json(url: &str, api_key: &str) -> AppResult<Value> {
-    let client = build_http_client(10)?;
+    let client = if uses_direct_connection(url) {
+        build_http_client_direct(30)?
+    } else {
+        build_http_client(30)?
+    };
     let response = client
         .get(url)
         .header("Authorization", format!("Bearer {api_key}"))
@@ -165,6 +171,10 @@ async fn get_models_json(url: &str, api_key: &str) -> AppResult<Value> {
         .json()
         .await
         .map_err(|error| AppError::Provider(error.to_string()))
+}
+
+fn uses_direct_connection(url: &str) -> bool {
+    url.contains("aliyuncs.com") || url.contains("volces.com")
 }
 
 fn model_option(id: &str, name: &str) -> ProviderModelOption {

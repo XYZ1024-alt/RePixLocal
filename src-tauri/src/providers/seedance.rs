@@ -220,7 +220,7 @@ fn segment_text(duration_sec: f64, motion_prompt: Option<&str>) -> String {
 }
 
 fn http_client() -> AppResult<reqwest::Client> {
-    crate::providers::http_client::build_http_client(120)
+    crate::providers::http_client::build_http_client_direct(180)
 }
 
 #[cfg(test)]
