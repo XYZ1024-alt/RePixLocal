@@ -267,10 +267,13 @@ impl Repository {
                 continue;
             };
             let encrypted_key: String = row.try_get("encrypted_key")?;
-            let decrypted = decrypt_secret(&encrypted_key)?;
+            let masked_key = match decrypt_secret(&encrypted_key) {
+                Ok(decrypted) => mask_secret(&decrypted),
+                Err(_) => String::new(),
+            };
             views.push(ProviderCredentialView {
                 provider: provider.to_string(),
-                masked_key: mask_secret(&decrypted),
+                masked_key,
                 config: Some(ProviderCredentialConfig {
                     base_url: row.try_get("base_url")?,
                     model: row.try_get("model")?,
