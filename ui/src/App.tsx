@@ -68,7 +68,11 @@ export function App() {
         <ConsoleListView onOpenRun={navigateToConsoleDetail} />
       )}
       {view === "console-detail" && (
-        <ConsoleDetailView runId={selectedRunId} onBack={() => navigate("console")} />
+        <ConsoleDetailView
+          runId={selectedRunId}
+          onBack={() => navigate("console")}
+          onResumed={navigateToConsoleDetail}
+        />
       )}
       {view === "library" && <AssetLibraryView onNewTask={navigateToWizard} />}
       {view === "settings" && (

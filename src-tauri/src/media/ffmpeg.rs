@@ -163,6 +163,73 @@ impl FfmpegRunner {
         Err(AppError::Workflow("ffmpeg keyframe extraction failed".into()))
     }
 
+    pub async fn render_final(
+        &self,
+        video_path: &Path,
+        out_path: &Path,
+        audio_path: Option<&Path>,
+        subtitle_ass: Option<&Path>,
+    ) -> AppResult<()> {
+        if let Some(parent) = out_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let ffmpeg = self.ffmpeg_path().await?;
+        let mut args = vec!["-y".to_string(), "-i".to_string(), path_arg(video_path)];
+        if let Some(audio) = audio_path {
+            args.push("-i".to_string());
+            args.push(path_arg(audio));
+        }
+
+        let mut vf_parts = Vec::new();
+        if let Some(audio) = audio_path {
+            let video_duration = self.probe_duration(video_path).await?;
+            let audio_duration = self.probe_duration(audio).await?;
+            let pad = audio_duration - video_duration;
+            if pad > 0.0 {
+                vf_parts.push(format!("tpad=stop_mode=clone:stop_duration={:.3}", pad + 0.5));
+            }
+        }
+        if let Some(ass_path) = subtitle_ass {
+            vf_parts.push(format!("subtitles='{}'", escape_subtitles_filter_path(ass_path)));
+        }
+
+        if !vf_parts.is_empty() {
+            args.push("-vf".to_string());
+            args.push(vf_parts.join(","));
+            args.push("-c:v".to_string());
+            args.push("libx264".to_string());
+        } else {
+            args.push("-c:v".to_string());
+            args.push("copy".to_string());
+        }
+
+        if audio_path.is_some() {
+            args.extend([
+                "-map".to_string(),
+                "0:v:0".to_string(),
+                "-map".to_string(),
+                "1:a:0".to_string(),
+                "-c:a".to_string(),
+                "aac".to_string(),
+                "-shortest".to_string(),
+            ]);
+        }
+
+        args.push(path_arg(out_path));
+        let status = Command::new(&ffmpeg)
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status()
+            .await
+            .map_err(AppError::from)?;
+        if status.success() {
+            return Ok(());
+        }
+        Err(AppError::Workflow("ffmpeg final render failed".into()))
+    }
+
     pub async fn copy_stream(&self, input: &Path, output: &Path) -> AppResult<()> {
         let ffmpeg = self.ffmpeg_path().await?;
         let status = Command::new(&ffmpeg)
@@ -207,6 +274,10 @@ fn resolve_binary(configured: Option<&str>, fallback_name: &str) -> Option<PathB
 
 fn path_arg(path: &Path) -> String {
     path.to_string_lossy().to_string()
+}
+
+fn escape_subtitles_filter_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/").replace(':', "\\:")
 }
 
 fn tool_check(name: &str, path: Option<PathBuf>) -> ToolCheck {

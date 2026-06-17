@@ -66,6 +66,8 @@
     "empty": "Submit a task from the Wizard to see live progress here.",
     "notStarted": "Not started",
     "backToList": "Back to list",
+    "cancelRun": "Cancel run",
+    "resumeRun": "Resume run",
     "stages": "Stages",
     "liveLog": "Real-time Logs",
     "assetsTitle": "Task Assets",

@@ -402,6 +402,38 @@ impl Repository {
         rows.into_iter().map(row_to_scene).collect()
     }
 
+    pub async fn list_scenes_for_task(&self, task_id: &str) -> AppResult<Vec<Scene>> {
+        let rows = sqlx::query(
+            "SELECT * FROM scenes WHERE task_id = ? ORDER BY created_at DESC, scene_index ASC",
+        )
+        .bind(task_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut scenes = rows.into_iter().map(row_to_scene).collect::<AppResult<Vec<_>>>()?;
+        if scenes.is_empty() {
+            return Ok(scenes);
+        }
+        let latest_run_id = scenes[0].run_id.clone();
+        scenes.retain(|scene| scene.run_id == latest_run_id);
+        scenes.sort_by_key(|scene| scene.scene_index);
+        Ok(scenes)
+    }
+
+    pub async fn cancel_run(&self, run_id: &str) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE stages SET status = ?, finished_at = ? \
+             WHERE run_id = ? AND status = ?",
+        )
+        .bind(stage_status_text(&StageStatus::Canceled))
+        .bind(Utc::now().to_rfc3339())
+        .bind(run_id)
+        .bind(stage_status_text(&StageStatus::Running))
+        .execute(&self.pool)
+        .await?;
+        self.update_run_stage(run_id, None, RunStatus::Canceled, None)
+            .await
+    }
+
     pub async fn count_scenes(&self, run_id: &str) -> AppResult<i64> {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scenes WHERE run_id = ?")
             .bind(run_id)

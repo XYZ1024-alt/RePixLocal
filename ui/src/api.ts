@@ -33,6 +33,14 @@ export async function submitTask(taskId: string) {
   return invoke<SubmitTaskResponse>("submit_task", { taskId });
 }
 
+export async function cancelTask(taskId: string) {
+  return invoke<void>("cancel_task", { taskId });
+}
+
+export async function resumeTask(taskId: string) {
+  return invoke<SubmitTaskResponse>("submit_task", { taskId });
+}
+
 export async function listRuns(limit = 100) {
   return invoke<RunListItem[]>("list_runs", { limit });
 }

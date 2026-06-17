@@ -94,11 +94,14 @@ impl WorkflowEngine {
                 "workflow canceled by user",
             )
             .await?;
-        if let Some(run) = run {
+        if let Some(run) = &run {
+            if matches!(run.status, crate::models::RunStatus::Running) {
+                self.repo.cancel_run(&run.id).await?;
+            }
             emit_pipeline_event(
                 app,
                 PipelineEvent::Run {
-                    run_id: run.id,
+                    run_id: run.id.clone(),
                     task_id: task_id.to_string(),
                     status: "CANCELLED".to_string(),
                 },

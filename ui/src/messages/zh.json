@@ -66,6 +66,8 @@
     "empty": "从向导提交任务后，可在这里查看实时进度。",
     "notStarted": "尚未开始",
     "backToList": "返回列表",
+    "cancelRun": "取消运行",
+    "resumeRun": "恢复运行",
     "stages": "阶段",
     "liveLog": "实时日志",
     "assetsTitle": "任务素材",

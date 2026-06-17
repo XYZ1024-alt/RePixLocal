@@ -11,13 +11,16 @@ use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
 use crate::media::ffmpeg::FfmpegRunner;
 use crate::media::frames::{extract_keyframes, KeyframeOptions, DEFAULT_SUBTITLE_REGION_RATIO};
-use crate::media::subtitles::{read_segments_from_json, segments_to_json, transcript_text};
+use crate::media::subtitles::{
+    ass_style_from_config, build_ass, cues_from_segments, read_segments_from_json, segments_to_json,
+    transcript_text,
+};
 use crate::media::whisper::WhisperRunner;
 use crate::models::{AssetType, Scene, StageType, Task, TaskStatus};
 use crate::providers::deepseek::DeepSeekClient;
 use crate::providers::fetch::download_to_file;
 use crate::providers::qwen_vl::QwenVlClient;
-use crate::providers::seedance::SeedanceClient;
+use crate::providers::seedance::{SegmentPollStatus, SeedanceClient};
 use crate::providers::tongyi::TongyiClient;
 use crate::storage::local_assets::{asset_for_path, mock_transcript_segments, AssetManager};
 use crate::storage::oss::OssClient;
@@ -75,6 +78,7 @@ impl PipelineRunner {
 
         for stage in ordered_stages() {
             if self.is_canceled(task_id).await? {
+                self.cancel_pipeline(task_id, run_id, app).await?;
                 return Ok(());
             }
             let result = self
@@ -161,10 +165,10 @@ impl PipelineRunner {
                 self.real_segment_stage(task_id, run_id, app, scene_count)
                     .await
             }
-            StageType::FinalRender => Err(AppError::Workflow(format!(
-                "{} is not implemented yet (coming in PR10)",
-                stage_event_name(stage)
-            ))),
+            StageType::FinalRender => {
+                self.real_render_stage(task_id, run_id, app, task, scene_count)
+                    .await
+            }
         }
     }
 
@@ -183,6 +187,19 @@ impl PipelineRunner {
     ) -> AppResult<()> {
         self.begin_stage(run_id, &StageType::TranscriptExtraction, app)
             .await?;
+        if transcript_outputs_ready(&self.assets, task_id) {
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                "Transcript and audio already exist; skipping",
+            )
+            .await?;
+            return self
+                .complete_stage(run_id, &StageType::TranscriptExtraction, app)
+                .await;
+        }
         self.log(task_id, run_id, app, "info", "Extracting audio track")
             .await?;
 
@@ -291,6 +308,19 @@ impl PipelineRunner {
     ) -> AppResult<()> {
         self.begin_stage(run_id, &StageType::ScriptRewrite, app)
             .await?;
+        if rewrite_outputs_ready(&self.assets, task_id, scene_count).await? {
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                "Script rewrite outputs already exist; skipping",
+            )
+            .await?;
+            return self
+                .complete_stage(run_id, &StageType::ScriptRewrite, app)
+                .await;
+        }
 
         self.log(
             task_id,
@@ -445,7 +475,7 @@ impl PipelineRunner {
             .get("aspectRatio")
             .and_then(|value| value.as_str())
             .unwrap_or("16:9");
-        let scenes = self.repo.list_scenes(run_id).await?;
+        let scenes = self.scenes_for_run(task_id, run_id).await?;
         if scenes.is_empty() {
             return Err(AppError::Workflow(
                 "no scenes found for storyboard generation".into(),
@@ -454,9 +484,22 @@ impl PipelineRunner {
 
         for scene in scenes {
             if self.is_canceled(task_id).await? {
+                self.cancel_pipeline(task_id, run_id, app).await?;
                 return Ok(());
             }
             let index = scene.scene_index;
+            let frame_path = self.assets.frame_path(task_id, index);
+            if frame_path.exists() {
+                self.log(
+                    task_id,
+                    run_id,
+                    app,
+                    "info",
+                    &format!("Scene {index}: storyboard frame already exists"),
+                )
+                .await?;
+                continue;
+            }
             let keyframe_path = scene_keyframe_path(&scene, task_id, &self.assets)?;
             let prompt = scene_storyboard_prompt(&scene);
             let source_key = format!("tasks/{task_id}/keyframes/{index}.png");
@@ -479,7 +522,6 @@ impl PipelineRunner {
                     aspect_ratio,
                 )
                 .await?;
-            let frame_path = self.assets.frame_path(task_id, index);
             download_to_file(&output.source_url, &frame_path).await?;
             let frame = asset_for_path(
                 task_id,
@@ -524,16 +566,29 @@ impl PipelineRunner {
             .await?;
         let oss = self.oss_client().await?;
         let seedance = SeedanceClient::new(self.repo.clone());
-        let scenes = self.repo.list_scenes(run_id).await?;
+        let scenes = self.scenes_for_run(task_id, run_id).await?;
 
         for index in 0..scene_count {
             if self.is_canceled(task_id).await? {
+                self.cancel_pipeline(task_id, run_id, app).await?;
                 return Ok(());
             }
             let scene = scenes
                 .iter()
                 .find(|scene| scene.scene_index == index)
                 .ok_or_else(|| AppError::Workflow(format!("scene {index} not found")))?;
+            let segment_path = self.assets.segment_path(task_id, index);
+            if segment_path.exists() {
+                self.log(
+                    task_id,
+                    run_id,
+                    app,
+                    "info",
+                    &format!("Scene {index}: video segment already exists"),
+                )
+                .await?;
+                continue;
+            }
             let frame_path = self.assets.frame_path(task_id, index);
             if !frame_path.exists() {
                 return Err(AppError::Workflow(format!(
@@ -562,8 +617,9 @@ impl PipelineRunner {
                 &format!("Scene {index}: polling Seedance job {job_id}"),
             )
             .await?;
-            let video_url = seedance.wait_for_segment(&job_id).await?;
-            let segment_path = self.assets.segment_path(task_id, index);
+            let video_url = self
+                .poll_segment_with_cancel(task_id, run_id, app, &seedance, &job_id, index)
+                .await?;
             download_to_file(&video_url, &segment_path).await?;
             let segment = asset_for_path(
                 task_id,
@@ -595,6 +651,180 @@ impl PipelineRunner {
 
         self.complete_stage(run_id, &StageType::SegmentGeneration, app)
             .await
+    }
+
+    async fn real_render_stage(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+        task: &Task,
+        scene_count: i32,
+    ) -> AppResult<()> {
+        self.begin_stage(run_id, &StageType::FinalRender, app).await?;
+        let final_path = self.assets.final_path(task_id);
+        if final_path.exists() {
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                "Final video already exists; skipping render",
+            )
+            .await?;
+            return self.complete_stage(run_id, &StageType::FinalRender, app).await;
+        }
+
+        let mut segment_paths = Vec::with_capacity(scene_count as usize);
+        for index in 0..scene_count {
+            let segment_path = self.assets.segment_path(task_id, index);
+            if !segment_path.exists() {
+                return Err(AppError::Workflow(format!(
+                    "video segment missing for scene {index}"
+                )));
+            }
+            segment_paths.push(segment_path);
+        }
+        if segment_paths.is_empty() {
+            return Err(AppError::Workflow("no segments to render".into()));
+        }
+
+        let workdir = self
+            .workspace
+            .root()
+            .join("temp")
+            .join(format!("{task_id}-{run_id}-render"));
+        tokio::fs::create_dir_all(&workdir).await?;
+        let render_result = async {
+            self.log(task_id, run_id, app, "info", "Concatenating segments")
+                .await?;
+            let concat_path = workdir.join("concat.mp4");
+            self.ffmpeg
+                .concat_segments(&segment_paths, &concat_path)
+                .await?;
+
+            let subtitle_path = self.assets.subtitle_path(task_id);
+            let segments = read_segments_from_json(&subtitle_path).await?;
+            let cues = cues_from_segments(&segments);
+            let ass_path = workdir.join("subs.ass");
+            build_ass(
+                &cues,
+                &ass_path,
+                &ass_style_from_config(&task.config_json),
+            )
+            .await?;
+
+            let audio_path = self.assets.audio_path(task_id);
+            let audio = if audio_path.exists() {
+                Some(audio_path)
+            } else {
+                None
+            };
+
+            self.log(task_id, run_id, app, "info", "Muxing audio + burning subtitles")
+                .await?;
+            let rendered_path = workdir.join("rendered.mp4");
+            self.ffmpeg
+                .render_final(
+                    &concat_path,
+                    &rendered_path,
+                    audio.as_deref(),
+                    Some(&ass_path),
+                )
+                .await?;
+            self.assets
+                .copy_file(&rendered_path, &final_path)
+                .await?;
+            Ok::<(), AppError>(())
+        }
+        .await;
+        let _ = tokio::fs::remove_dir_all(&workdir).await;
+        render_result?;
+
+        let final_video = asset_for_path(
+            task_id,
+            run_id,
+            AssetType::FinalVideo,
+            final_path,
+            "video/mp4",
+            None,
+        );
+        self.repo.insert_asset(&final_video).await?;
+        self.complete_stage(run_id, &StageType::FinalRender, app)
+            .await
+    }
+
+    async fn scenes_for_run(&self, task_id: &str, run_id: &str) -> AppResult<Vec<Scene>> {
+        let scenes = self.repo.list_scenes(run_id).await?;
+        if !scenes.is_empty() {
+            return Ok(scenes);
+        }
+        self.repo.list_scenes_for_task(task_id).await
+    }
+
+    async fn poll_segment_with_cancel(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+        seedance: &SeedanceClient,
+        job_id: &str,
+        scene_index: i32,
+    ) -> AppResult<String> {
+        use std::time::Duration;
+        use tokio::time::sleep;
+
+        const SEGMENT_POLL_INTERVAL_SECS: u64 = 10;
+        const SEGMENT_TIMEOUT_SECS: u64 = 1800;
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(SEGMENT_TIMEOUT_SECS);
+        loop {
+            if self.is_canceled(task_id).await? {
+                self.cancel_pipeline(task_id, run_id, app).await?;
+                return Err(AppError::Workflow("workflow canceled".into()));
+            }
+            let polled = seedance.poll_segment(job_id).await?;
+            match polled.status {
+                SegmentPollStatus::Ready => {
+                    return polled.source_url.ok_or_else(|| {
+                        AppError::Provider("Seedance returned READY without video URL".into())
+                    });
+                }
+                SegmentPollStatus::Failed => {
+                    return Err(AppError::Provider(format!(
+                        "Scene {scene_index}: segment generation failed"
+                    )));
+                }
+                SegmentPollStatus::Pending => {
+                    if tokio::time::Instant::now() > deadline {
+                        return Err(AppError::Provider(format!(
+                            "Scene {scene_index}: segment timed out after {SEGMENT_TIMEOUT_SECS}s"
+                        )));
+                    }
+                    sleep(Duration::from_secs(SEGMENT_POLL_INTERVAL_SECS)).await;
+                }
+            }
+        }
+    }
+
+    async fn cancel_pipeline(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+    ) -> AppResult<()> {
+        self.repo.cancel_run(run_id).await?;
+        self.log(task_id, run_id, app, "warn", "workflow canceled")
+            .await?;
+        emit_pipeline_event(
+            app,
+            PipelineEvent::Run {
+                run_id: run_id.to_string(),
+                task_id: task_id.to_string(),
+                status: "CANCELLED".to_string(),
+            },
+        );
+        Ok(())
     }
 
     async fn mock_transcript_stage(
@@ -979,6 +1209,23 @@ impl PipelineRunner {
             .ok_or_else(|| AppError::Workflow(format!("task not found: {task_id}")))?;
         Ok(matches!(task.status, TaskStatus::Canceled))
     }
+}
+
+fn transcript_outputs_ready(assets: &AssetManager, task_id: &str) -> bool {
+    assets.audio_path(task_id).exists() && assets.subtitle_path(task_id).exists()
+}
+
+async fn rewrite_outputs_ready(
+    assets: &AssetManager,
+    task_id: &str,
+    scene_count: i32,
+) -> AppResult<bool> {
+    for index in 0..scene_count {
+        if !assets.keyframe_path(task_id, index).exists() {
+            return Ok(false);
+        }
+    }
+    Ok(assets.subtitle_path(task_id).exists())
 }
 
 fn scene_count_from_config(config: &serde_json::Value) -> i32 {

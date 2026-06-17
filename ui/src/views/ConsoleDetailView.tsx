@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
-import { getRun, getRunCosts, listAssets } from "@/api";
+import { cancelTask, getRun, getRunCosts, listAssets, resumeTask } from "@/api";
 import { ConsoleLive, type LogSnapshot, type StageSnapshot } from "@/components/ConsoleLive";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ type LoadedDetail = {
 export function ConsoleDetailView(props: {
   runId: string | null;
   onBack: () => void;
+  onResumed?: (runId: string) => void;
 }) {
   const t = useTranslations("console");
   const tStages = useTranslations("stages");
@@ -27,6 +28,7 @@ export function ConsoleDetailView(props: {
   const [loaded, setLoaded] = useState<LoadedDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
 
   useEffect(() => {
     if (!props.runId) {
@@ -125,6 +127,43 @@ export function ConsoleDetailView(props: {
   }
 
   const { detail, costSummary, assets } = loaded;
+  const runStatus = detail.status as RunStatus;
+  const canCancel = runStatus === "RUNNING";
+  const canResume = runStatus === "FAILED" || runStatus === "CANCELLED";
+
+  async function handleCancel() {
+    setActionBusy(true);
+    setError(null);
+    try {
+      await cancelTask(detail.task_id);
+      const run = await getRun(detail.id);
+      if (run) {
+        setLoaded({
+          detail: run,
+          costSummary,
+          assets
+        });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function handleResume() {
+    setActionBusy(true);
+    setError(null);
+    try {
+      const response = await resumeTask(detail.task_id);
+      props.onResumed?.(response.run_id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
   const initialStages: StageSnapshot[] = detail.stages.map((stage) => ({
     type: stage.stage_type,
     label: tStages(stage.stage_type),
@@ -136,7 +175,26 @@ export function ConsoleDetailView(props: {
       <PageHeader
         title={detail.task_title}
         description={detail.task_id}
-        actions={<BackButton label={t("backToList")} onBack={props.onBack} />}
+        actions={
+          <div className="flex items-center gap-2">
+            {canCancel ? (
+              <Button
+                disabled={actionBusy}
+                onClick={() => void handleCancel()}
+                type="button"
+                variant="outline"
+              >
+                {t("cancelRun")}
+              </Button>
+            ) : null}
+            {canResume ? (
+              <Button disabled={actionBusy} onClick={() => void handleResume()} type="button">
+                {t("resumeRun")}
+              </Button>
+            ) : null}
+            <BackButton label={t("backToList")} onBack={props.onBack} />
+          </div>
+        }
       />
       <ConsoleLive
         runId={detail.id}
