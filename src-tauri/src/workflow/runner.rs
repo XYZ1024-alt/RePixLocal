@@ -15,8 +15,12 @@ use crate::media::subtitles::{read_segments_from_json, segments_to_json, transcr
 use crate::media::whisper::WhisperRunner;
 use crate::models::{AssetType, Scene, StageType, Task, TaskStatus};
 use crate::providers::deepseek::DeepSeekClient;
+use crate::providers::fetch::download_to_file;
 use crate::providers::qwen_vl::QwenVlClient;
+use crate::providers::seedance::SeedanceClient;
+use crate::providers::tongyi::TongyiClient;
 use crate::storage::local_assets::{asset_for_path, mock_transcript_segments, AssetManager};
+use crate::storage::oss::OssClient;
 use crate::workspace::Workspace;
 use crate::workflow::events::{emit_pipeline_event, PipelineEvent};
 use crate::workflow::stages::{ordered_stages, stage_event_name};
@@ -150,11 +154,23 @@ impl PipelineRunner {
                 self.real_rewrite_stage(task_id, run_id, app, task, scene_count, source_video)
                     .await
             }
-            _ => Err(AppError::Workflow(format!(
-                "{} is not implemented yet (coming in PR9+)",
+            StageType::StoryboardGeneration => {
+                self.real_storyboard_stage(task_id, run_id, app, task).await
+            }
+            StageType::SegmentGeneration => {
+                self.real_segment_stage(task_id, run_id, app, scene_count)
+                    .await
+            }
+            StageType::FinalRender => Err(AppError::Workflow(format!(
+                "{} is not implemented yet (coming in PR10)",
                 stage_event_name(stage)
             ))),
         }
+    }
+
+    async fn oss_client(&self) -> AppResult<OssClient> {
+        let config = self.config.read().await;
+        OssClient::from_config(&config)
     }
 
     async fn real_transcript_stage(
@@ -410,6 +426,174 @@ impl PipelineRunner {
         }
 
         self.complete_stage(run_id, &StageType::ScriptRewrite, app)
+            .await
+    }
+
+    async fn real_storyboard_stage(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+        task: &Task,
+    ) -> AppResult<()> {
+        self.begin_stage(run_id, &StageType::StoryboardGeneration, app)
+            .await?;
+        let oss = self.oss_client().await?;
+        let tongyi = TongyiClient::new(self.repo.clone());
+        let aspect_ratio = task
+            .config_json
+            .get("aspectRatio")
+            .and_then(|value| value.as_str())
+            .unwrap_or("16:9");
+        let scenes = self.repo.list_scenes(run_id).await?;
+        if scenes.is_empty() {
+            return Err(AppError::Workflow(
+                "no scenes found for storyboard generation".into(),
+            ));
+        }
+
+        for scene in scenes {
+            if self.is_canceled(task_id).await? {
+                return Ok(());
+            }
+            let index = scene.scene_index;
+            let keyframe_path = scene_keyframe_path(&scene, task_id, &self.assets)?;
+            let prompt = scene_storyboard_prompt(&scene);
+            let source_key = format!("tasks/{task_id}/keyframes/{index}.png");
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                &format!("Scene {index}: generating storyboard frame with Tongyi"),
+            )
+            .await?;
+            let output = tongyi
+                .generate_frame_img2img(
+                    &oss,
+                    &source_key,
+                    &keyframe_path,
+                    &prompt,
+                    index,
+                    0.35,
+                    aspect_ratio,
+                )
+                .await?;
+            let frame_path = self.assets.frame_path(task_id, index);
+            download_to_file(&output.source_url, &frame_path).await?;
+            let frame = asset_for_path(
+                task_id,
+                run_id,
+                AssetType::GeneratedFrame,
+                frame_path,
+                "image/png",
+                Some(index),
+            );
+            self.repo.insert_asset(&frame).await?;
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                &format!("Scene {index}: storyboard frame generated"),
+            )
+            .await?;
+            self.record_usage(
+                "TONGYI",
+                task_id,
+                run_id,
+                "image2image/image-synthesis",
+                "images",
+                1.0,
+            )
+            .await?;
+        }
+
+        self.complete_stage(run_id, &StageType::StoryboardGeneration, app)
+            .await
+    }
+
+    async fn real_segment_stage(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+        scene_count: i32,
+    ) -> AppResult<()> {
+        self.begin_stage(run_id, &StageType::SegmentGeneration, app)
+            .await?;
+        let oss = self.oss_client().await?;
+        let seedance = SeedanceClient::new(self.repo.clone());
+        let scenes = self.repo.list_scenes(run_id).await?;
+
+        for index in 0..scene_count {
+            if self.is_canceled(task_id).await? {
+                return Ok(());
+            }
+            let scene = scenes
+                .iter()
+                .find(|scene| scene.scene_index == index)
+                .ok_or_else(|| AppError::Workflow(format!("scene {index} not found")))?;
+            let frame_path = self.assets.frame_path(task_id, index);
+            if !frame_path.exists() {
+                return Err(AppError::Workflow(format!(
+                    "storyboard frame missing for scene {index}"
+                )));
+            }
+            let motion = scene.motion_prompt.as_deref();
+            let duration_sec = scene_duration_secs(scene);
+            let frame_key = format!("tasks/{task_id}/frames/{index}.png");
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                &format!("Scene {index}: submitting video segment to Seedance"),
+            )
+            .await?;
+            let job_id = seedance
+                .submit_segment(&oss, &frame_key, &frame_path, duration_sec, motion)
+                .await?;
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                &format!("Scene {index}: polling Seedance job {job_id}"),
+            )
+            .await?;
+            let video_url = seedance.wait_for_segment(&job_id).await?;
+            let segment_path = self.assets.segment_path(task_id, index);
+            download_to_file(&video_url, &segment_path).await?;
+            let segment = asset_for_path(
+                task_id,
+                run_id,
+                AssetType::VideoSegment,
+                segment_path,
+                "video/mp4",
+                Some(index),
+            );
+            self.repo.insert_asset(&segment).await?;
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                &format!("Scene {index}: video segment ready"),
+            )
+            .await?;
+            self.record_usage(
+                "SEEDANCE",
+                task_id,
+                run_id,
+                "video/submit",
+                "seconds",
+                duration_sec,
+            )
+            .await?;
+        }
+
+        self.complete_stage(run_id, &StageType::SegmentGeneration, app)
             .await
     }
 
@@ -823,6 +1007,47 @@ fn subtitle_target_language(config: &serde_json::Value) -> String {
     } else {
         "Simplified Chinese".to_string()
     }
+}
+
+fn scene_storyboard_prompt(scene: &Scene) -> String {
+    scene
+        .visual_prompt
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(scene.script_text.as_str())
+        .to_string()
+}
+
+fn scene_keyframe_path(
+    scene: &Scene,
+    task_id: &str,
+    assets: &AssetManager,
+) -> AppResult<std::path::PathBuf> {
+    if let Some(path) = scene
+        .metadata_json
+        .as_ref()
+        .and_then(|value| value.get("keyframePath"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+    {
+        let keyframe = std::path::PathBuf::from(path);
+        if keyframe.exists() {
+            return Ok(keyframe);
+        }
+    }
+    Ok(assets.keyframe_path(task_id, scene.scene_index))
+}
+
+fn scene_duration_secs(scene: &Scene) -> f64 {
+    scene
+        .metadata_json
+        .as_ref()
+        .and_then(|metadata| {
+            let start = metadata.get("startMs")?.as_i64()?;
+            let end = metadata.get("endMs")?.as_i64()?;
+            Some(((end - start) as f64 / 1000.0).clamp(3.0, 10.0))
+        })
+        .unwrap_or(5.0)
 }
 
 fn keyframe_subtitle_region_ratio(config: &serde_json::Value) -> AppResult<Option<f64>> {

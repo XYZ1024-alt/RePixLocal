@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 
 use crate::errors::AppResult;
+use crate::storage::oss::merge_secret_on_save;
 use crate::workspace::Workspace;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,6 +15,20 @@ pub struct AppConfig {
     pub mock_providers: bool,
     pub whisper_bin: Option<String>,
     pub whisper_model_dir: Option<String>,
+    #[serde(default)]
+    pub s3_endpoint: Option<String>,
+    #[serde(default)]
+    pub s3_public_endpoint: Option<String>,
+    #[serde(default)]
+    pub s3_bucket: Option<String>,
+    #[serde(default)]
+    pub s3_access_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub s3_secret_key_encrypted: Option<String>,
+    #[serde(default, skip_serializing, skip_deserializing)]
+    pub s3_secret_configured: bool,
+    #[serde(default, skip_serializing)]
+    pub s3_secret_key: Option<String>,
 }
 
 fn default_mock_providers() -> bool {
@@ -30,6 +45,13 @@ impl AppConfig {
             mock_providers: true,
             whisper_bin: None,
             whisper_model_dir: Some(default_whisper_model_dir(workspace)),
+            s3_endpoint: None,
+            s3_public_endpoint: None,
+            s3_bucket: None,
+            s3_access_key: None,
+            s3_secret_key_encrypted: None,
+            s3_secret_configured: false,
+            s3_secret_key: None,
         }
     }
 }
@@ -56,7 +78,10 @@ pub async fn load_or_create(workspace: &Workspace) -> AppResult<AppConfig> {
 }
 
 pub async fn save(workspace: &Workspace, config: &AppConfig) -> AppResult<()> {
-    let bytes = serde_json::to_vec_pretty(config)?;
+    let mut persisted = config.clone();
+    merge_secret_on_save(&mut persisted)?;
+    persisted.s3_secret_key = None;
+    let bytes = serde_json::to_vec_pretty(&persisted)?;
     fs::write(workspace.config_path(), bytes).await?;
     Ok(())
 }

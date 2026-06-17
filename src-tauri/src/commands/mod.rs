@@ -165,14 +165,27 @@ pub async fn check_ffmpeg(state: State<'_, AppState>) -> Result<Vec<ToolCheck>, 
 
 #[tauri::command]
 pub async fn get_settings(state: State<'_, AppState>) -> Result<AppConfig, String> {
-    Ok(state.config.read().await.clone())
+    Ok(crate::storage::oss::sanitize_config_for_ui(
+        state.config.read().await.clone(),
+    ))
 }
 
 #[tauri::command]
 pub async fn update_settings(
-    input: AppConfig,
+    mut input: AppConfig,
     state: State<'_, AppState>,
 ) -> Result<AppConfig, String> {
+    {
+        let current = state.config.read().await;
+        let secret_empty = input
+            .s3_secret_key
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty);
+        if secret_empty {
+            input.s3_secret_key_encrypted = current.s3_secret_key_encrypted.clone();
+        }
+    }
     save(&state.workspace, &input)
         .await
         .map_err(command_error)?;
@@ -180,7 +193,7 @@ pub async fn update_settings(
         let mut config = state.config.write().await;
         *config = input.clone();
     }
-    Ok(input)
+    Ok(crate::storage::oss::sanitize_config_for_ui(input))
 }
 
 #[tauri::command]

@@ -94,6 +94,7 @@ pub fn validate_provider_config(config: &ProviderConfig) -> AppResult<()> {
 
 pub mod catalog;
 pub mod deepseek;
+pub mod fetch;
 pub mod json_util;
 pub mod qwen_vl;
 pub mod seedance;
