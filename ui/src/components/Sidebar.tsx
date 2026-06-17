@@ -99,8 +99,8 @@ export function Sidebar({
             LU
           </div>
           <div className="hidden min-w-0 flex-1 flex-col lg:flex">
-            <span className="truncate text-xs font-medium">Local User</span>
-            <span className="truncate text-xs text-muted-foreground">repix@local</span>
+            <span className="truncate text-xs font-medium">{t("localUser")}</span>
+            <span className="truncate text-xs text-muted-foreground">{t("localEmail")}</span>
           </div>
           <ChevronDown className="hidden size-3.5 text-muted-foreground lg:block" />
         </div>

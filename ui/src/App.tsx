@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { checkFfmpeg, getDashboardData, getSettings } from "./api";
 import { Shell } from "./components/Shell";
+import { useTranslations } from "./i18n/context";
 import { DashboardView } from "./views/DashboardView";
 import { TaskWizardView } from "./views/TaskWizardView";
 import { ConsoleListView } from "./views/ConsoleListView";
@@ -56,7 +57,9 @@ export function App() {
 
   return (
     <Shell activeView={view} hasError={Boolean(message)} onNavigate={navigate}>
-      {message && <ErrorBanner message={message} onDismiss={() => setMessage("")} />}
+      {message && (
+        <ErrorBanner message={message} onDismiss={() => setMessage("")} />
+      )}
       {view === "dashboard" && (
         <DashboardView data={dashboardData} onNewTask={navigateToWizard} />
       )}
@@ -85,12 +88,14 @@ export function App() {
 }
 
 function ErrorBanner(props: { message: string; onDismiss: () => void }) {
+  const t = useTranslations("shell");
+
   return (
     <div className="mx-4 mt-3 flex items-center gap-2 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200 lg:mx-6">
       <AlertTriangle size={16} />
       <span className="flex-1">{props.message}</span>
       <button className="text-xs text-red-100/80 hover:text-red-50" onClick={props.onDismiss} type="button">
-        Dismiss
+        {t("dismiss")}
       </button>
     </div>
   );

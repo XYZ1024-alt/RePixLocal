@@ -22,6 +22,9 @@ repix-local-development.md
 .env.*
 !.env.example
 
+# Agent / terminal session artifacts
+terminals/
+
 # Editor / OS noise
 .DS_Store
 Thumbs.db

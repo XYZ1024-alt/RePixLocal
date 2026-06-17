@@ -9,10 +9,14 @@
     "settings": "设置",
     "docs": "文档",
     "signOut": "退出登录",
-    "user": "用户"
+    "user": "用户",
+    "localUser": "本地用户",
+    "localEmail": "repix@local"
   },
   "shell": {
-    "allSystemsOperational": "系统运行正常"
+    "allSystemsOperational": "系统运行正常",
+    "attentionRequired": "需要关注",
+    "dismiss": "关闭"
   },
   "metadata": {
     "title": "RePix",

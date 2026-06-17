@@ -34,7 +34,7 @@ export function Shell(props: {
               }
             >
               <Circle className={props.hasError ? "size-2 fill-amber-400 text-amber-400" : "size-2 fill-emerald-400 text-emerald-400"} />
-              {props.hasError ? "Attention Required" : t("allSystemsOperational")}
+              {props.hasError ? t("attentionRequired") : t("allSystemsOperational")}
             </div>
             <span className="flex size-9 items-center justify-center rounded-md border border-white/[0.08] bg-white/[0.03] text-muted-foreground">
               <Bell className="size-4" />

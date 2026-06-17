@@ -9,10 +9,14 @@
     "settings": "Settings",
     "docs": "Docs",
     "signOut": "Sign out",
-    "user": "User"
+    "user": "User",
+    "localUser": "Local User",
+    "localEmail": "repix@local"
   },
   "shell": {
-    "allSystemsOperational": "All Systems Operational"
+    "allSystemsOperational": "All Systems Operational",
+    "attentionRequired": "Attention Required",
+    "dismiss": "Dismiss"
   },
   "metadata": {
     "title": "RePix",
