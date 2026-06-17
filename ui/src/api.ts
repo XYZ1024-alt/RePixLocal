@@ -14,7 +14,8 @@ import type {
   Settings,
   SubmitTaskResponse,
   Task,
-  ToolCheck
+  ToolCheck,
+  WhisperModelStatus
 } from "./types";
 
 export async function getDashboardData() {
@@ -71,6 +72,14 @@ export async function updateSettings(input: Settings) {
 
 export async function checkFfmpeg() {
   return invoke<ToolCheck[]>("check_ffmpeg");
+}
+
+export async function ensureWhisperModel(model?: string) {
+  return invoke<WhisperModelStatus>("ensure_whisper_model", { model: model ?? null });
+}
+
+export async function getWhisperModelStatus(model?: string) {
+  return invoke<WhisperModelStatus>("get_whisper_model_status", { model: model ?? null });
 }
 
 export async function saveProviderCredential(input: ProviderCredentialPayload) {

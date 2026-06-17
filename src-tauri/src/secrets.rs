@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
 use aes_gcm::Aes256Gcm;
@@ -14,30 +15,54 @@ const KEYRING_SERVICE: &str = "repix-local";
 const KEYRING_USER: &str = "provider-master-key";
 const MASTER_KEY_FILE: &str = "master.key";
 const MASTER_KEY_LEN: usize = 32;
+const NONCE_LEN: usize = 12;
+
+static CANONICAL_MASTER_KEY: OnceLock<Vec<u8>> = OnceLock::new();
 
 pub fn decrypt_secret(encrypted: &str) -> AppResult<String> {
-    let key = load_or_create_master_key()?;
-    let (nonce_b64, ciphertext_b64) = encrypted
-        .split_once(':')
-        .ok_or_else(|| secret_error("decrypt", "invalid encrypted secret format"))?;
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|error| secret_error("decrypt", error))?;
-    let nonce_bytes = STANDARD
-        .decode(nonce_b64.trim())
-        .map_err(|error| secret_error("decrypt", error))?;
-    let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
-    let ciphertext = STANDARD
-        .decode(ciphertext_b64.trim())
-        .map_err(|error| secret_error("decrypt", error))?;
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext.as_ref())
-        .map_err(|error| secret_error("decrypt", error))?;
-    String::from_utf8(plaintext).map_err(|error| secret_error("decrypt", error))
+    let (nonce_bytes, ciphertext) = parse_encrypted_payload(encrypted)?;
+    let candidates = load_existing_master_keys()?;
+    if candidates.is_empty() {
+        return Err(secret_error(
+            "decrypt",
+            "no master encryption key available",
+        ));
+    }
+
+    let mut key_mismatch = false;
+    for key in candidates {
+        match try_decrypt_with_key(&nonce_bytes, &ciphertext, &key) {
+            Ok(plaintext) => {
+                remember_canonical_master_key(&key);
+                persist_master_key_if_needed(&key)?;
+                return Ok(plaintext);
+            }
+            Err(DecryptAttempt::KeyMismatch) => key_mismatch = true,
+            Err(DecryptAttempt::InvalidPlaintext(error)) => {
+                return Err(secret_error("decrypt", error));
+            }
+        }
+    }
+
+    if key_mismatch {
+        return Err(secret_error(
+            "decrypt",
+            "encryption key mismatch — re-enter API keys and S3 secret in Settings",
+        ));
+    }
+    Err(secret_error("decrypt", "no master encryption key available"))
 }
 
 pub fn mask_secret(secret: &str) -> String {
     if secret.chars().count() > 4 {
-        let visible: String = secret.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+        let visible: String = secret
+            .chars()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         let masked_len = secret.chars().count() - 4;
         format!("{}{}", "*".repeat(masked_len), visible)
     } else {
@@ -46,7 +71,7 @@ pub fn mask_secret(secret: &str) -> String {
 }
 
 pub fn encrypt_secret(secret: &str) -> AppResult<String> {
-    let key = load_or_create_master_key()?;
+    let key = resolve_master_key_for_encrypt()?;
     let cipher = Aes256Gcm::new_from_slice(&key)
         .map_err(|error| secret_error("encrypt", error))?;
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
@@ -60,16 +85,115 @@ pub fn encrypt_secret(secret: &str) -> AppResult<String> {
     ))
 }
 
-fn load_or_create_master_key() -> AppResult<Vec<u8>> {
+#[derive(Debug)]
+enum DecryptAttempt {
+    KeyMismatch,
+    InvalidPlaintext(String),
+}
+
+fn parse_encrypted_payload(encrypted: &str) -> AppResult<(Vec<u8>, Vec<u8>)> {
+    let (nonce_b64, ciphertext_b64) = encrypted
+        .split_once(':')
+        .ok_or_else(|| secret_error("decrypt", "invalid encrypted secret format"))?;
+    let nonce_bytes = STANDARD
+        .decode(nonce_b64.trim())
+        .map_err(|error| secret_error("decrypt", error))?;
+    if nonce_bytes.len() != NONCE_LEN {
+        return Err(secret_error(
+            "decrypt",
+            format!("invalid encrypted secret format: expected {NONCE_LEN}-byte nonce"),
+        ));
+    }
+    let ciphertext = STANDARD
+        .decode(ciphertext_b64.trim())
+        .map_err(|error| secret_error("decrypt", error))?;
+    Ok((nonce_bytes, ciphertext))
+}
+
+fn try_decrypt_with_key(
+    nonce_bytes: &[u8],
+    ciphertext: &[u8],
+    key: &[u8],
+) -> Result<String, DecryptAttempt> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|error| {
+        DecryptAttempt::InvalidPlaintext(format!("invalid master key: {error}"))
+    })?;
+    let nonce = aes_gcm::Nonce::from_slice(nonce_bytes);
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .map_err(|_| DecryptAttempt::KeyMismatch)?;
+    String::from_utf8(plaintext)
+        .map_err(|error| DecryptAttempt::InvalidPlaintext(error.to_string()))
+}
+
+fn resolve_master_key_for_encrypt() -> AppResult<Vec<u8>> {
+    if let Some(key) = CANONICAL_MASTER_KEY.get() {
+        return Ok(key.clone());
+    }
+
     let path = master_key_path()?;
+    let file_key = read_master_key_file(&path)?;
+    let keyring_key = read_master_key_from_keyring()?;
+
+    match (&file_key, &keyring_key) {
+        (Some(file), Some(keyring)) if file == keyring => {
+            remember_canonical_master_key(file);
+            Ok(file.clone())
+        }
+        (Some(_), Some(_)) => Err(secret_error(
+            "encrypt",
+            "local encryption keys are out of sync — re-enter API keys in Settings",
+        )),
+        (Some(file), None) => {
+            persist_master_key(file)?;
+            remember_canonical_master_key(file);
+            Ok(file.clone())
+        }
+        (None, Some(keyring)) => {
+            persist_master_key(keyring)?;
+            remember_canonical_master_key(keyring);
+            Ok(keyring.clone())
+        }
+        (None, None) => create_master_key(),
+    }
+}
+
+fn load_existing_master_keys() -> AppResult<Vec<Vec<u8>>> {
+    let path = master_key_path()?;
+    let mut candidates = Vec::new();
     if let Some(key) = read_master_key_file(&path)? {
-        return Ok(key);
+        candidates.push(key);
     }
     if let Some(key) = read_master_key_from_keyring()? {
-        write_master_key_file(&path, &key)?;
-        return Ok(key);
+        if !candidates.iter().any(|existing| existing == &key) {
+            candidates.push(key);
+        }
     }
-    create_master_key(&path)
+    Ok(candidates)
+}
+
+fn remember_canonical_master_key(key: &[u8]) {
+    let _ = CANONICAL_MASTER_KEY.get_or_init(|| key.to_vec());
+}
+
+fn persist_master_key_if_needed(key: &[u8]) -> AppResult<()> {
+    let path = master_key_path()?;
+    let file_key = read_master_key_file(&path)?;
+    let keyring_key = read_master_key_from_keyring()?;
+    let key_vec = key.to_vec();
+    if file_key.as_ref() == Some(&key_vec) && keyring_key.as_ref() == Some(&key_vec) {
+        return Ok(());
+    }
+    persist_master_key(key)
+}
+
+fn persist_master_key(key: &[u8]) -> AppResult<()> {
+    let path = master_key_path()?;
+    write_master_key_file(&path, key)?;
+    if let Ok(entry) = keyring_entry() {
+        let _ = entry.set_password(&STANDARD.encode(key));
+    }
+    Ok(())
 }
 
 fn read_master_key_file(path: &PathBuf) -> AppResult<Option<Vec<u8>>> {
@@ -114,13 +238,11 @@ fn read_master_key_from_keyring() -> AppResult<Option<Vec<u8>>> {
     Ok(None)
 }
 
-fn create_master_key(path: &PathBuf) -> AppResult<Vec<u8>> {
+fn create_master_key() -> AppResult<Vec<u8>> {
     let key = Aes256Gcm::generate_key(&mut OsRng);
     let bytes = key.to_vec();
-    write_master_key_file(path, &bytes)?;
-    if let Ok(entry) = keyring_entry() {
-        let _ = entry.set_password(&STANDARD.encode(&bytes));
-    }
+    persist_master_key(&bytes)?;
+    remember_canonical_master_key(&bytes);
     Ok(bytes)
 }
 
@@ -176,5 +298,34 @@ mod tests {
             .decrypt(nonce, ciphertext_bytes.as_ref())
             .unwrap();
         assert_eq!(plaintext, b"sk-provider-test");
+    }
+
+    #[test]
+    fn decrypt_falls_back_to_alternate_master_key() {
+        use super::{try_decrypt_with_key, DecryptAttempt};
+
+        let primary = [1u8; 32];
+        let alternate = [2u8; 32];
+        let cipher = Aes256Gcm::new_from_slice(&alternate).unwrap();
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let ciphertext = cipher
+            .encrypt(&nonce, b"provider-secret".as_ref())
+            .unwrap();
+
+        assert!(matches!(
+            try_decrypt_with_key(nonce.as_slice(), &ciphertext, &primary),
+            Err(DecryptAttempt::KeyMismatch)
+        ));
+        let plaintext =
+            try_decrypt_with_key(nonce.as_slice(), &ciphertext, &alternate).expect("decrypt");
+        assert_eq!(plaintext, "provider-secret");
+    }
+
+    #[test]
+    fn parse_encrypted_payload_rejects_invalid_nonce_length() {
+        use super::parse_encrypted_payload;
+
+        let err = parse_encrypted_payload("YQ==:Ym9keQ==").expect_err("short nonce");
+        assert!(err.to_string().contains("12-byte nonce"));
     }
 }

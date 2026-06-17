@@ -2,12 +2,14 @@ use tauri::{AppHandle, State};
 
 use crate::config::{save, AppConfig};
 use crate::errors::command_error;
+use crate::media::whisper_models;
 use crate::models::{
     AppLog, Asset, CostSummary, CreateTaskInput, DashboardData, DashboardSummary, PickedVideoFile,
     PipelineRun, PipelineStage, ProviderCredentialInput, ProviderCredentialView,
     ProviderModelOption, RunDetail, RunListItem, SubmitTaskResponse, Task, ToolCheck,
+    WhisperModelStatus,
 };
-use crate::providers::{catalog, validate_provider_config, ProviderConfig};
+use crate::providers::{model_catalog, validate_provider_config, ProviderConfig};
 use crate::state::AppState;
 
 #[tauri::command]
@@ -158,9 +160,92 @@ pub async fn list_logs(task_id: String, state: State<'_, AppState>) -> Result<Ve
 
 #[tauri::command]
 pub async fn check_ffmpeg(state: State<'_, AppState>) -> Result<Vec<ToolCheck>, String> {
+    let (model_name, model_dir) = {
+        let config = state.config.read().await;
+        (
+            config.asr_model.clone().unwrap_or_else(|| "base".to_string()),
+            config.whisper_model_dir.clone(),
+        )
+    };
+
     let mut tools = state.ffmpeg.check_tools().await;
-    tools.push(state.whisper.check_tool().await);
+    if resolve_whisper_cli_available(&state).await {
+        if let Err(error) = whisper_models::ensure_whisper_model(
+            &state.workspace,
+            model_dir.as_deref(),
+            &model_name,
+        )
+        .await
+        {
+            tracing::warn!("whisper model ensure failed during tool check: {error}");
+        }
+    }
+    tools.push(state.whisper.check_tool(&state.workspace).await);
     Ok(tools)
+}
+
+#[tauri::command]
+pub async fn ensure_whisper_model(
+    model: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<WhisperModelStatus, String> {
+    let (model_name, model_dir) = {
+        let config = state.config.read().await;
+        (
+            model
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| config.asr_model.clone())
+                .unwrap_or_else(|| "base".to_string()),
+            config.whisper_model_dir.clone(),
+        )
+    };
+    whisper_models::ensure_whisper_model(&state.workspace, model_dir.as_deref(), &model_name)
+        .await
+        .map_err(command_error)?;
+    whisper_model_status_internal(&state, &model_name).await
+}
+
+#[tauri::command]
+pub async fn get_whisper_model_status(
+    model: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<WhisperModelStatus, String> {
+    let model_name = {
+        let config = state.config.read().await;
+        model
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| config.asr_model.clone())
+            .unwrap_or_else(|| "base".to_string())
+    };
+    whisper_model_status_internal(&state, &model_name).await
+}
+
+async fn whisper_model_status_internal(
+    state: &AppState,
+    model_name: &str,
+) -> Result<WhisperModelStatus, String> {
+    let model_dir = state.config.read().await.whisper_model_dir.clone();
+    let mut status = whisper_models::model_status(
+        &state.workspace,
+        model_dir.as_deref(),
+        model_name,
+    );
+    let download = whisper_models::get_download_state().await;
+    status.downloading = download.downloading && download.model_name == model_name;
+    status.bytes_done = download.bytes_done;
+    status.bytes_total = download.bytes_total;
+    status.error = download.error;
+    Ok(status)
+}
+
+async fn resolve_whisper_cli_available(state: &AppState) -> bool {
+    let config = state.config.read().await;
+    crate::media::bundled_tools::resolve_tool_path(
+        config.whisper_bin.as_deref(),
+        "whisper-cli",
+        "whisper-cli",
+    )
+    .is_some_and(|path| path.exists() && crate::media::bundled_tools::is_executable_file(&path))
 }
 
 #[tauri::command]
@@ -220,8 +305,22 @@ pub async fn list_provider_credentials(
 }
 
 #[tauri::command]
-pub async fn list_provider_models(provider: String) -> Result<Vec<ProviderModelOption>, String> {
-    Ok(catalog::list_provider_models(&provider))
+pub async fn list_provider_models(
+    provider: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<ProviderModelOption>, String> {
+    let mock = state.config.read().await.mock_providers;
+    if mock {
+        return Ok(model_catalog::mock_models(&provider));
+    }
+    let creds = state
+        .repo
+        .get_provider_listing_credentials(&provider)
+        .await
+        .map_err(command_error)?;
+    model_catalog::fetch_models(&provider, &creds)
+        .await
+        .map_err(command_error)
 }
 
 #[tauri::command]

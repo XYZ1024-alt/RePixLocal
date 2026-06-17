@@ -29,8 +29,8 @@ RePix Local 是 [RePix](https://github.com) 的本地桌面版：用 **Tauri 2 +
 - **Node.js** 18+ 与 npm
 - **Rust** stable（含 `cargo`）
 - **Tauri 依赖**（Windows 需 WebView2；首次开发建议安装 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)）
-- **FFmpeg / FFprobe**（可在设置页配置路径，或确保在 `PATH` 中）
-- **whisper.cpp**（Stage 1 真实转写；设置页配置 `whisper-cli` 与模型目录）
+- **FFmpeg / FFprobe / whisper-cli**：Windows 安装包已内置；也可在设置页覆盖为自定义路径
+- **Whisper 模型**：首次转写时自动从 Hugging Face 下载到本地 `models/whisper/`（默认 `base` 模型）
 
 ## 快速开始
 
@@ -55,6 +55,7 @@ npm run rust:check  # Rust 编译检查
 npm run rust:test   # Rust 单元测试
 npm run test        # ui:check + rust:test
 npm run check       # ui:check + rust:check + rust:test（提交前推荐）
+npm run fetch-tools # 下载并准备内置 FFmpeg / whisper-cli（打包前自动执行）
 npm run build       # 打包 Windows NSIS 安装包
 npm run build:win   # 同上，显式指定 x86_64-pc-windows-msvc
 ```

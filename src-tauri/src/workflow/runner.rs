@@ -228,9 +228,10 @@ impl PipelineRunner {
             .root()
             .join("temp")
             .join(format!("{task_id}-{run_id}-whisper"));
+        self.whisper.ensure_model(&self.workspace).await?;
         let transcript = self
             .whisper
-            .transcribe(&audio_path, language, &output_prefix)
+            .transcribe(&self.workspace, &audio_path, language, &output_prefix)
             .await?;
 
         let mut segments = transcript.segments;

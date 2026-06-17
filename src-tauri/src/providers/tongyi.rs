@@ -2,12 +2,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::Client;
+
 use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
+use crate::providers::http_client::format_http_error;
 use crate::storage::oss::OssClient;
 
 const DEFAULT_IMAGE_SIZE: &str = "1280*720";
@@ -110,15 +111,14 @@ impl TongyiClient {
             },
             "parameters": { "size": WAN_MULTIMODAL_SIZE, "n": 1, "watermark": false }
         });
+        let url = format!("{base_url}/services/aigc/multimodal-generation/generation");
         let response = client
-            .post(format!(
-                "{base_url}/services/aigc/multimodal-generation/generation"
-            ))
+            .post(&url)
             .headers(json_headers(&settings.api_key))
             .json(&payload)
             .send()
             .await
-            .map_err(|error| AppError::Provider(error.to_string()))?;
+            .map_err(|error| AppError::Provider(format_http_error(&url, &error)))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -156,14 +156,15 @@ impl TongyiClient {
                 "n": 1
             }
         });
+        let url = format!("{base_url}/services/aigc/text2image/image-synthesis");
         let response = client
-            .post(format!("{base_url}/services/aigc/text2image/image-synthesis"))
+            .post(&url)
             .headers(json_headers(&settings.api_key))
             .header("X-DashScope-Async", "enable")
             .json(&payload)
             .send()
             .await
-            .map_err(|error| AppError::Provider(error.to_string()))?;
+            .map_err(|error| AppError::Provider(format_http_error(&url, &error)))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -196,14 +197,14 @@ impl TongyiClient {
         let base_url = settings.base_url.trim_end_matches('/');
         let client = http_client()?;
         for _ in 0..POLL_MAX_ATTEMPTS {
+            let url =
+                format!("{base_url}/services/aigc/text2image/image-synthesis/{task_id}");
             let response = client
-                .get(format!(
-                    "{base_url}/services/aigc/text2image/image-synthesis/{task_id}"
-                ))
+                .get(&url)
                 .header("Authorization", format!("Bearer {}", settings.api_key))
                 .send()
                 .await
-                .map_err(|error| AppError::Provider(error.to_string()))?;
+                .map_err(|error| AppError::Provider(format_http_error(&url, &error)))?;
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
@@ -323,11 +324,8 @@ fn contains_unsafe_prompt_term(sentence: &str) -> bool {
     UNSAFE_PROMPT_TERMS.iter().any(|term| lower.contains(term))
 }
 
-fn http_client() -> AppResult<Client> {
-    Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-        .map_err(|error| AppError::Provider(error.to_string()))
+fn http_client() -> AppResult<reqwest::Client> {
+    crate::providers::http_client::build_http_client(120)
 }
 
 fn json_headers(api_key: &str) -> reqwest::header::HeaderMap {

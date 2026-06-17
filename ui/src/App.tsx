@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { checkFfmpeg, getDashboardData, getSettings } from "./api";
+import { checkFfmpeg, ensureWhisperModel, getDashboardData, getSettings } from "./api";
 import { Shell } from "./components/Shell";
 import { useTranslations } from "./i18n/context";
 import { DashboardView } from "./views/DashboardView";
@@ -20,14 +20,19 @@ export function App() {
   const [message, setMessage] = useState("");
 
   const refresh = useCallback(async () => {
-    const [nextSettings, nextTools, nextDashboard] = await Promise.all([
+    const [nextSettings, nextDashboard] = await Promise.all([
       getSettings(),
-      checkFfmpeg(),
       getDashboardData()
     ]);
     setSettings(nextSettings);
-    setTools(nextTools);
     setDashboardData(nextDashboard);
+    try {
+      await ensureWhisperModel(nextSettings.asr_model);
+    } catch {
+      // Tool check below surfaces download errors.
+    }
+    const nextTools = await checkFfmpeg();
+    setTools(nextTools);
   }, []);
 
   useEffect(() => {
@@ -80,6 +85,11 @@ export function App() {
           settings={settings}
           tools={tools}
           onRefresh={async () => {
+            try {
+              await ensureWhisperModel(settings.asr_model);
+            } catch {
+              // checkFfmpeg reports tool errors.
+            }
             const nextTools = await checkFfmpeg();
             setTools(nextTools);
           }}

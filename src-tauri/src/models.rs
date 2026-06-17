@@ -177,6 +177,12 @@ pub struct ProviderSettings {
     pub model: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProviderListingCredentials {
+    pub api_key: String,
+    pub base_url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewrittenScene {
     pub index: i32,
@@ -201,6 +207,23 @@ pub struct ToolCheck {
     pub found: bool,
     pub path: Option<String>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub bundled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhisperModelStatus {
+    pub model_name: String,
+    pub downloaded: bool,
+    pub path: String,
+    #[serde(default)]
+    pub downloading: bool,
+    #[serde(default)]
+    pub bytes_done: u64,
+    #[serde(default)]
+    pub bytes_total: Option<u64>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +242,8 @@ pub struct ProviderCredentialConfig {
 pub struct ProviderCredentialView {
     pub provider: String,
     pub masked_key: String,
+    #[serde(default)]
+    pub key_decrypt_failed: bool,
     pub config: Option<ProviderCredentialConfig>,
 }
 

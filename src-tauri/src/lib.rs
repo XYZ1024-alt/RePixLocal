@@ -12,11 +12,11 @@ pub mod workflow;
 pub mod workspace;
 
 use commands::{
-    cancel_task, check_ffmpeg, create_task, get_dashboard_data, get_dashboard_summary,
-    get_latest_run, get_run, get_run_costs, get_settings, get_task, list_all_assets, list_assets,
-    list_logs, list_provider_credentials, list_provider_models, list_run_stages, list_runs,
-    list_tasks, pick_video_file, save_provider_credential, start_task, submit_task, test_provider,
-    update_settings,
+    cancel_task, check_ffmpeg, create_task, ensure_whisper_model, get_dashboard_data,
+    get_dashboard_summary, get_latest_run, get_run, get_run_costs, get_settings, get_task,
+    get_whisper_model_status, list_all_assets, list_assets, list_logs, list_provider_credentials,
+    list_provider_models, list_run_stages, list_runs, list_tasks, pick_video_file,
+    save_provider_credential, start_task, submit_task, test_provider, update_settings,
 };
 use state::AppState;
 
@@ -26,6 +26,12 @@ pub fn run() {
         .expect("failed to initialize RePix Local state");
 
     tauri::Builder::default()
+        .setup(|_| {
+            if let Err(error) = media::whisper_runtime::sync_whisper_runtime_near_exe() {
+                tracing::warn!("failed to sync whisper runtime DLLs: {error}");
+            }
+            Ok(())
+        })
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             create_task,
@@ -45,6 +51,8 @@ pub fn run() {
             list_run_stages,
             list_logs,
             check_ffmpeg,
+            ensure_whisper_model,
+            get_whisper_model_status,
             get_settings,
             update_settings,
             save_provider_credential,

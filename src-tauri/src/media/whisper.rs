@@ -8,8 +8,17 @@ use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
 use crate::errors::{AppError, AppResult};
+use crate::media::bundled_tools::{
+    is_executable_file, resolve_tool_path_with_source, ToolSource,
+};
+use crate::media::whisper_models;
+use crate::media::whisper_runtime::{
+    format_process_failure, whisper_runtime_ready, whisper_runtime_search_dir,
+};
 use crate::models::{ToolCheck, TranscriptResult, TranscriptSegment};
-const WHISPER_BINARY_CANDIDATES: [&str; 3] = ["whisper-cli", "whisper", "main"];
+use crate::workspace::Workspace;
+
+const WHISPER_PATH_CANDIDATES: [&str; 2] = ["whisper-cli", "whisper"];
 
 #[derive(Debug, Clone)]
 pub struct WhisperRunner {
@@ -21,62 +30,101 @@ impl WhisperRunner {
         Self { config }
     }
 
-    pub async fn check_tool(&self) -> ToolCheck {
+    pub async fn ensure_model(&self, workspace: &Workspace) -> AppResult<PathBuf> {
         let config = self.config.read().await;
-        let binary = resolve_whisper_binary(config.whisper_bin.as_deref());
-        let model = resolve_model_path(&config, config.asr_model.as_deref().unwrap_or("base"));
-        let model_error = model.as_ref().err().map(|error| error.to_string());
-        match (&binary, model.as_ref()) {
-            (Some(path), Ok(model_path)) if path.exists() && model_path.exists() => ToolCheck {
-                name: "whisper".to_string(),
-                found: true,
-                path: Some(path.to_string_lossy().to_string()),
-                error: None,
-            },
-            (Some(path), Ok(model_path)) => ToolCheck {
+        let model_name = config.asr_model.as_deref().unwrap_or("base");
+        whisper_models::ensure_whisper_model(
+            workspace,
+            config.whisper_model_dir.as_deref(),
+            model_name,
+        )
+        .await
+    }
+
+    pub async fn check_tool(&self, workspace: &Workspace) -> ToolCheck {
+        let config = self.config.read().await;
+        let model_name = config.asr_model.as_deref().unwrap_or("base");
+        let binary = resolve_whisper_binary_with_source(config.whisper_bin.as_deref());
+        let model_path = whisper_models::model_path_for_dir(
+            &whisper_models::resolve_model_dir(
+                workspace,
+                config.whisper_model_dir.as_deref(),
+            ),
+            model_name,
+        );
+        let model_error = if model_path.exists() {
+            None
+        } else {
+            Some(format!(
+                "whisper model missing: {} (expected ggml-{model_name}.bin)",
+                model_path.display()
+            ))
+        };
+
+        match binary {
+            Some((path, source))
+                if path.exists()
+                    && is_executable_file(&path)
+                    && model_path.exists()
+                    && whisper_runtime_search_dir(&path).is_some() =>
+            {
+                ToolCheck {
+                    name: "whisper".to_string(),
+                    found: true,
+                    path: Some(path.to_string_lossy().to_string()),
+                    error: None,
+                    bundled: source == ToolSource::Bundled,
+                }
+            }
+            Some((path, source)) if path.exists() && is_executable_file(&path) && !whisper_runtime_ready(path.parent().unwrap_or(Path::new("."))) => ToolCheck {
                 name: "whisper".to_string(),
                 found: false,
                 path: Some(path.to_string_lossy().to_string()),
-                error: Some(format!(
-                    "whisper binary found but model missing: {}",
-                    model_path.display()
-                )),
+                error: Some(
+                    "whisper runtime DLLs missing next to whisper-cli; rerun npm run fetch-tools and restart"
+                        .into(),
+                ),
+                bundled: source == ToolSource::Bundled,
             },
-            (Some(path), Err(_)) => ToolCheck {
+            Some((path, source)) if path.exists() && is_executable_file(&path) => ToolCheck {
                 name: "whisper".to_string(),
                 found: false,
                 path: Some(path.to_string_lossy().to_string()),
                 error: model_error,
+                bundled: source == ToolSource::Bundled,
             },
-            (None, _) => ToolCheck {
+            Some((path, source)) => ToolCheck {
+                name: "whisper".to_string(),
+                found: false,
+                path: Some(path.to_string_lossy().to_string()),
+                error: Some("whisper-cli path is not a valid executable".into()),
+                bundled: source == ToolSource::Bundled,
+            },
+            None => ToolCheck {
                 name: "whisper".to_string(),
                 found: false,
                 path: None,
                 error: Some(
-                    "whisper-cli not found in PATH; set whisper_bin in settings".into(),
+                    "whisper-cli not found; bundled tool missing or set whisper_bin in settings"
+                        .into(),
                 ),
+                bundled: false,
             },
         }
     }
 
     pub async fn transcribe(
         &self,
+        workspace: &Workspace,
         audio_path: &Path,
         language: Option<&str>,
         output_prefix: &Path,
     ) -> AppResult<TranscriptResult> {
+        let model_path = self.ensure_model(workspace).await?;
         let config = self.config.read().await;
         let binary = resolve_whisper_binary(config.whisper_bin.as_deref()).ok_or_else(|| {
-            AppError::Tool("whisper-cli is not configured or not found in PATH".into())
+            AppError::Tool("whisper-cli is not configured or not found".into())
         })?;
-        let model_name = config.asr_model.as_deref().unwrap_or("base");
-        let model_path = resolve_model_path(&config, model_name)?;
-        if !model_path.exists() {
-            return Err(AppError::Tool(format!(
-                "whisper model not found: {} (download ggml-{model_name}.bin)",
-                model_path.display()
-            )));
-        }
 
         if let Some(parent) = output_prefix.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -99,20 +147,28 @@ impl WhisperRunner {
             args.push(language.to_string());
         }
 
-        let output = Command::new(&binary)
+        let mut command = Command::new(&binary);
+        command
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .map_err(AppError::from)?;
+            .stderr(Stdio::piped());
+        if let Some(runtime_dir) = whisper_runtime_search_dir(&binary) {
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            let joined = std::env::join_paths([runtime_dir.as_os_str(), path.as_os_str()]).ok();
+            if let Some(value) = joined {
+                command.env("PATH", value);
+            }
+        }
+
+        let output = command.output().await.map_err(AppError::from)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
             return Err(AppError::Tool(format!(
                 "whisper transcription failed: {}",
-                stderr.trim()
+                format_process_failure(output.status.code(), &stdout, &stderr)
             )));
         }
 
@@ -127,37 +183,23 @@ impl WhisperRunner {
 }
 
 fn resolve_whisper_binary(configured: Option<&str>) -> Option<PathBuf> {
-    if let Some(path) = configured.filter(|value| !value.trim().is_empty()) {
-        let candidate = PathBuf::from(path);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-        return Some(candidate);
-    }
-    WHISPER_BINARY_CANDIDATES
-        .iter()
-        .find_map(|name| which::which(name).ok())
+    resolve_whisper_binary_with_source(configured).map(|(path, _)| path)
 }
 
-fn resolve_model_path(config: &AppConfig, model_name: &str) -> AppResult<PathBuf> {
-    let file_name = format!("ggml-{model_name}.bin");
-    if let Some(dir) = config
-        .whisper_model_dir
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
+fn resolve_whisper_binary_with_source(
+    configured: Option<&str>,
+) -> Option<(PathBuf, ToolSource)> {
+    if let Some(result) =
+        resolve_tool_path_with_source(configured, "whisper-cli", "whisper-cli")
     {
-        let candidate = PathBuf::from(dir).join(&file_name);
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-        return Err(AppError::Tool(format!(
-            "whisper model not found: {} (expected ggml-{model_name}.bin)",
-            candidate.display()
-        )));
+        return Some(result);
     }
-    Err(AppError::Tool(format!(
-        "whisper_model_dir is not configured; place {file_name} there and set the path in settings"
-    )))
+    WHISPER_PATH_CANDIDATES.iter().find_map(|name| {
+        which::which(name)
+            .ok()
+            .filter(|path| is_executable_file(path))
+            .map(|path| (path, ToolSource::SystemPath))
+    })
 }
 
 fn parse_whisper_json(body: &str) -> AppResult<TranscriptResult> {

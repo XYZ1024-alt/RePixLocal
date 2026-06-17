@@ -8,6 +8,9 @@ use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
 use crate::errors::{AppError, AppResult};
+use crate::media::bundled_tools::{
+    is_executable_file, resolve_tool_path, resolve_tool_path_with_source, ToolSource,
+};
 use crate::models::ToolCheck;
 
 #[derive(Debug, Clone)]
@@ -23,8 +26,18 @@ impl FfmpegRunner {
     pub async fn check_tools(&self) -> Vec<ToolCheck> {
         let config = self.config.read().await;
         vec![
-            tool_check("ffmpeg", resolve_binary(config.ffmpeg_path.as_deref(), "ffmpeg")),
-            tool_check("ffprobe", resolve_binary(config.ffprobe_path.as_deref(), "ffprobe")),
+            tool_check(
+                "ffmpeg",
+                "ffmpeg",
+                config.ffmpeg_path.as_deref(),
+                "ffmpeg",
+            ),
+            tool_check(
+                "ffprobe",
+                "ffprobe",
+                config.ffprobe_path.as_deref(),
+                "ffprobe",
+            ),
         ]
     }
 
@@ -248,28 +261,17 @@ impl FfmpegRunner {
 
     async fn ffmpeg_path(&self) -> AppResult<PathBuf> {
         let config = self.config.read().await;
-        resolve_binary(config.ffmpeg_path.as_deref(), "ffmpeg").ok_or_else(|| {
+        resolve_tool_path(config.ffmpeg_path.as_deref(), "ffmpeg", "ffmpeg").ok_or_else(|| {
             AppError::Workflow("ffmpeg is not configured or not found in PATH".into())
         })
     }
 
     async fn ffprobe_path(&self) -> AppResult<PathBuf> {
         let config = self.config.read().await;
-        resolve_binary(config.ffprobe_path.as_deref(), "ffprobe").ok_or_else(|| {
+        resolve_tool_path(config.ffprobe_path.as_deref(), "ffprobe", "ffprobe").ok_or_else(|| {
             AppError::Workflow("ffprobe is not configured or not found in PATH".into())
         })
     }
-}
-
-fn resolve_binary(configured: Option<&str>, fallback_name: &str) -> Option<PathBuf> {
-    if let Some(path) = configured.filter(|value| !value.trim().is_empty()) {
-        let candidate = PathBuf::from(path);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-        return Some(candidate);
-    }
-    which::which(fallback_name).ok()
 }
 
 fn path_arg(path: &Path) -> String {
@@ -280,25 +282,40 @@ fn escape_subtitles_filter_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/").replace(':', "\\:")
 }
 
-fn tool_check(name: &str, path: Option<PathBuf>) -> ToolCheck {
-    match path {
-        Some(path) if path.exists() || which::which(name).is_ok() => ToolCheck {
+fn tool_check(
+    name: &str,
+    sidecar_name: &str,
+    configured: Option<&str>,
+    fallback: &str,
+) -> ToolCheck {
+    match resolve_tool_path_with_source(configured, sidecar_name, fallback) {
+        Some((path, source)) if path.exists() && is_executable_file(&path) => ToolCheck {
             name: name.to_string(),
             found: true,
             path: Some(path.to_string_lossy().to_string()),
             error: None,
+            bundled: source == ToolSource::Bundled,
         },
-        Some(path) => ToolCheck {
+        Some((path, source)) if path.exists() => ToolCheck {
+            name: name.to_string(),
+            found: true,
+            path: Some(path.to_string_lossy().to_string()),
+            error: None,
+            bundled: source == ToolSource::Bundled,
+        },
+        Some((path, _)) => ToolCheck {
             name: name.to_string(),
             found: false,
             path: Some(path.to_string_lossy().to_string()),
             error: Some(format!("{name} path does not exist")),
+            bundled: false,
         },
         None => ToolCheck {
             name: name.to_string(),
             found: false,
             path: None,
-            error: Some(format!("{name} not found in PATH")),
+            error: Some(format!("{name} not found in PATH or bundled tools")),
+            bundled: false,
         },
     }
 }

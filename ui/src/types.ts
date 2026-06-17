@@ -182,6 +182,7 @@ export type ProviderCredentialConfig = {
 export type ProviderCredentialView = {
   provider: string;
   masked_key: string;
+  key_decrypt_failed?: boolean;
   config: ProviderCredentialConfig | null;
 };
 
@@ -190,6 +191,17 @@ export type ToolCheck = {
   found: boolean;
   path?: string;
   error?: string;
+  bundled?: boolean;
+};
+
+export type WhisperModelStatus = {
+  model_name: string;
+  downloaded: boolean;
+  path: string;
+  downloading?: boolean;
+  bytes_done?: number;
+  bytes_total?: number | null;
+  error?: string | null;
 };
 
 export type Settings = {

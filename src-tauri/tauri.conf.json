@@ -33,6 +33,14 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "externalBin": [
+      "binaries/ffmpeg",
+      "binaries/ffprobe",
+      "binaries/whisper-cli"
+    ],
+    "resources": {
+      "binaries/whisper-runtime/": "whisper-runtime/"
+    },
     "icon": ["icons/icon.ico"],
     "shortDescription": "Local AI video replication desktop app",
     "longDescription": "RePix Local runs the full five-stage AI video replication pipeline on your machine: transcription, script rewrite, storyboard generation, segment synthesis, and final render.",

@@ -3,11 +3,12 @@ use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use reqwest::Client;
+
 use serde_json::{json, Value};
 
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
+use crate::providers::http_client::{build_http_client, format_http_error};
 
 const FRAME_PROMPT: &str = "Describe this video frame in detail for image generation purposes. \
 Include:\n\
@@ -45,10 +46,7 @@ impl QwenVlClient {
     ) -> AppResult<FrameAnalysisResult> {
         let settings = self.repo.get_provider_settings("QWEN_VL").await?;
         let base_url = settings.base_url.trim_end_matches('/').to_string();
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .map_err(|error| AppError::Provider(error.to_string()))?;
+        let client = build_http_client(120)?;
         let mut descriptions = Vec::with_capacity(frame_paths.len());
         for (index, frame_path) in frame_paths.iter().enumerate() {
             let bytes = tokio::fs::read(frame_path.as_ref())
@@ -70,16 +68,17 @@ impl QwenVlClient {
                     ]
                 }
             });
+            let url = format!(
+                "{base_url}/services/aigc/multimodal-generation/generation"
+            );
             let response = client
-                .post(format!(
-                    "{base_url}/services/aigc/multimodal-generation/generation"
-                ))
+                .post(&url)
                 .header("Authorization", format!("Bearer {}", settings.api_key))
                 .header("Content-Type", "application/json")
                 .json(&payload)
                 .send()
                 .await
-                .map_err(|error| AppError::Provider(error.to_string()))?;
+                .map_err(|error| AppError::Provider(format_http_error(&url, &error)))?;
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();

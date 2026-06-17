@@ -3,12 +3,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::Client;
+
 use serde_json::{json, Value};
 
 
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
+use crate::providers::http_client::format_http_error;
 use crate::storage::oss::OssClient;
 
 const SEGMENT_POLL_INTERVAL_SECS: u64 = 10;
@@ -58,14 +59,15 @@ impl SeedanceClient {
             ]
         });
         let client = http_client()?;
+        let url = format!("{base_url}/contents/generations/tasks");
         let response = client
-            .post(format!("{base_url}/contents/generations/tasks"))
+            .post(&url)
             .header("Authorization", format!("Bearer {}", settings.api_key))
             .header("Content-Type", "application/json")
             .json(&payload)
             .send()
             .await
-            .map_err(|error| AppError::Provider(error.to_string()))?;
+            .map_err(|error| AppError::Provider(format_http_error(&url, &error)))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -87,12 +89,13 @@ impl SeedanceClient {
         let settings = self.repo.get_provider_settings("SEEDANCE").await?;
         let base_url = settings.base_url.trim_end_matches('/');
         let client = http_client()?;
+        let url = format!("{base_url}/contents/generations/tasks/{job_id}");
         let response = client
-            .get(format!("{base_url}/contents/generations/tasks/{job_id}"))
+            .get(&url)
             .header("Authorization", format!("Bearer {}", settings.api_key))
             .send()
             .await
-            .map_err(|error| AppError::Provider(error.to_string()))?;
+            .map_err(|error| AppError::Provider(format_http_error(&url, &error)))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -216,11 +219,8 @@ fn segment_text(duration_sec: f64, motion_prompt: Option<&str>) -> String {
     }
 }
 
-fn http_client() -> AppResult<Client> {
-    Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-        .map_err(|error| AppError::Provider(error.to_string()))
+fn http_client() -> AppResult<reqwest::Client> {
+    crate::providers::http_client::build_http_client(120)
 }
 
 #[cfg(test)]

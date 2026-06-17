@@ -9,7 +9,8 @@ use crate::errors::AppResult;
 use crate::models::{
     AppLog, Asset, AssetStatus, AssetType, CostSummary, CreateTaskInput, DashboardData,
     DashboardStats, ProviderCostSummary, ProviderCredentialConfig, ProviderCredentialInput,
-    ProviderCredentialView, ProviderSettings, QueueItem, RunDetail, RunDetailLog, RunDetailStage,
+    ProviderCredentialView, ProviderListingCredentials, ProviderSettings, QueueItem, RunDetail,
+    RunDetailLog, RunDetailStage,
     RunListItem,
     Scene, TrendPoint, UsageItem, DashboardSummary, PipelineRun, PipelineStage, RunStatus,
     StageStatus, StageType, Task, TaskStatus,
@@ -247,6 +248,39 @@ impl Repository {
         })
     }
 
+    pub async fn get_provider_listing_credentials(
+        &self,
+        provider: &str,
+    ) -> AppResult<ProviderListingCredentials> {
+        let row = sqlx::query(
+            "SELECT encrypted_key, base_url FROM provider_credentials \
+             WHERE UPPER(provider) = ? ORDER BY updated_at DESC LIMIT 1",
+        )
+        .bind(provider.to_uppercase())
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Err(crate::errors::AppError::Provider(format!(
+                "{provider} API key not configured."
+            )));
+        };
+        let encrypted_key: String = row.try_get("encrypted_key")?;
+        let api_key = decrypt_secret(&encrypted_key)?;
+        if api_key.trim().is_empty() {
+            return Err(crate::errors::AppError::Provider(format!(
+                "{provider} API key not configured."
+            )));
+        }
+        let base_url: String = row
+            .try_get::<Option<String>, _>("base_url")?
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| default_provider_base_url(provider).to_string());
+        Ok(ProviderListingCredentials {
+            api_key,
+            base_url,
+        })
+    }
+
     pub async fn list_provider_credentials(&self) -> AppResult<Vec<ProviderCredentialView>> {
         const PROVIDERS: [&str; 4] = ["DEEPSEEK", "QWEN_VL", "TONGYI", "SEEDANCE"];
         let mut views = Vec::new();
@@ -262,18 +296,20 @@ impl Repository {
                 views.push(ProviderCredentialView {
                     provider: provider.to_string(),
                     masked_key: String::new(),
+                    key_decrypt_failed: false,
                     config: None,
                 });
                 continue;
             };
             let encrypted_key: String = row.try_get("encrypted_key")?;
-            let masked_key = match decrypt_secret(&encrypted_key) {
-                Ok(decrypted) => mask_secret(&decrypted),
-                Err(_) => String::new(),
+            let (masked_key, key_decrypt_failed) = match decrypt_secret(&encrypted_key) {
+                Ok(decrypted) => (mask_secret(&decrypted), false),
+                Err(_) => ("****".to_string(), true),
             };
             views.push(ProviderCredentialView {
                 provider: provider.to_string(),
                 masked_key,
+                key_decrypt_failed,
                 config: Some(ProviderCredentialConfig {
                     base_url: row.try_get("base_url")?,
                     model: row.try_get("model")?,

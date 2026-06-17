@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use reqwest::Client;
 use serde_json::{json, Value};
 
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
+use crate::providers::http_client::{build_http_client, format_http_error};
 use crate::models::{RewrittenScene, TranscriptSegment};
 use crate::providers::json_util::parse_json_payload;
 
@@ -142,18 +142,16 @@ impl DeepSeekClient {
         payload: Value,
     ) -> AppResult<String> {
         let base_url = normalize_openai_base_url(&settings.base_url);
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .map_err(|error| AppError::Provider(error.to_string()))?;
+        let client = build_http_client(120)?;
+        let url = format!("{base_url}/chat/completions");
         let response = client
-            .post(format!("{base_url}/chat/completions"))
+            .post(&url)
             .header("Authorization", format!("Bearer {}", settings.api_key))
             .header("Content-Type", "application/json")
             .json(&payload)
             .send()
             .await
-            .map_err(|error| AppError::Provider(error.to_string()))?;
+            .map_err(|error| AppError::Provider(format_http_error(&url, &error)))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();

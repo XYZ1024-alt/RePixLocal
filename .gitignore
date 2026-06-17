@@ -41,6 +41,7 @@ coverage/
 # Tauri generated artifacts
 src-tauri/gen/
 src-tauri/.tauri/
+src-tauri/binaries/
 
 # Local / generated assets
 mcps/

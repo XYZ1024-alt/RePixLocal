@@ -10,6 +10,8 @@ import {
   Wrench
 } from "lucide-react";
 import {
+  ensureWhisperModel,
+  getWhisperModelStatus,
   listProviderCredentials,
   listProviderModels,
   saveProviderCredential,
@@ -36,7 +38,13 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTranslations } from "@/i18n/context";
-import type { ProviderCredentialView, ProviderModelOption, Settings, ToolCheck } from "@/types";
+import type {
+  ProviderCredentialView,
+  ProviderModelOption,
+  Settings,
+  ToolCheck,
+  WhisperModelStatus
+} from "@/types";
 
 type Provider = "DEEPSEEK" | "QWEN_VL" | "TONGYI" | "SEEDANCE";
 
@@ -85,6 +93,7 @@ export function SettingsView(props: {
                   label={PROVIDER_LABELS[provider]}
                   description={t(`providerDesc.${provider}`)}
                   maskedKey={credential?.masked_key}
+                  keyDecryptFailed={credential?.key_decrypt_failed}
                   config={credential?.config}
                   onSaved={() =>
                     listProviderCredentials()
@@ -115,6 +124,7 @@ function ProviderKeyCard(props: {
   label: string;
   description: string;
   maskedKey?: string;
+  keyDecryptFailed?: boolean;
   config?: { base_url?: string; model?: string } | null;
   onSaved: () => void;
 }) {
@@ -128,7 +138,9 @@ function ProviderKeyCard(props: {
   const [models, setModels] = useState<ProviderModelOption[] | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
   const [useCustomModel, setUseCustomModel] = useState(false);
-  const isConfigured = Boolean(props.maskedKey);
+  const [keyChanged, setKeyChanged] = useState(false);
+  const hasSavedKey = Boolean(props.maskedKey) && !props.keyDecryptFailed;
+  const isConfigured = hasSavedKey;
 
   useEffect(() => {
     setBaseUrl(props.config?.base_url ?? "");
@@ -136,9 +148,31 @@ function ProviderKeyCard(props: {
   }, [props.config?.base_url, props.config?.model]);
 
   async function handleFetchModels() {
+    if (!key && !hasSavedKey) {
+      setMessage({ type: "error", text: t("apiKeyRequired") });
+      return;
+    }
+
     setLoadingModels(true);
     setMessage(null);
+
     try {
+      if (key) {
+        try {
+          await saveProviderCredential({
+            provider: props.provider,
+            label: "default",
+            api_key: key,
+            base_url: baseUrl,
+            model: ""
+          });
+          setKeyChanged(false);
+        } catch {
+          setMessage({ type: "error", text: t("failedToSaveKey") });
+          return;
+        }
+      }
+
       const fetched = await listProviderModels(props.provider);
       if (fetched.length > 0) {
         setModels(fetched);
@@ -161,12 +195,16 @@ function ProviderKeyCard(props: {
 
   async function handleSave(event: React.FormEvent) {
     event.preventDefault();
-    if (!key && !props.maskedKey) {
+    if (!key && !hasSavedKey) {
       setMessage({ type: "error", text: t("apiKeyRequired") });
       return;
     }
     if (!model) {
       setMessage({ type: "error", text: t("modelRequired") });
+      return;
+    }
+    if (keyChanged && !models) {
+      setMessage({ type: "error", text: t("fetchModelsFirst") });
       return;
     }
 
@@ -182,6 +220,7 @@ function ProviderKeyCard(props: {
       });
       setMessage({ type: "success", text: t("savedSuccessfully") });
       setKey("");
+      setKeyChanged(false);
       props.onSaved();
       window.setTimeout(() => setMessage(null), 3000);
     } catch {
@@ -204,8 +243,16 @@ function ProviderKeyCard(props: {
               <CardDescription>{props.description}</CardDescription>
             </div>
           </div>
-          <Badge variant={isConfigured ? "default" : "secondary"}>
-            {isConfigured ? (
+          <Badge
+            variant={
+              props.keyDecryptFailed ? "destructive" : isConfigured ? "default" : "secondary"
+            }
+          >
+            {props.keyDecryptFailed ? (
+              <>
+                <AlertCircle className="mr-1 size-3" /> {t("keyDecryptFailedBadge")}
+              </>
+            ) : isConfigured ? (
               <>
                 <CheckCircle2 className="mr-1 size-3" /> {t("configured")}
               </>
@@ -225,10 +272,13 @@ function ProviderKeyCard(props: {
               <Input
                 id={`${props.provider}-key`}
                 type={showKey ? "text" : "password"}
-                placeholder={props.maskedKey || "sk-..."}
+                placeholder={
+                  props.keyDecryptFailed ? "sk-..." : props.maskedKey || "sk-..."
+                }
                 value={key}
                 onChange={(event) => {
                   setKey(event.target.value);
+                  setKeyChanged(true);
                   if (event.target.value) {
                     setModels(null);
                     setModel("");
@@ -244,10 +294,16 @@ function ProviderKeyCard(props: {
                 {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
               </button>
             </div>
-            {props.maskedKey && !key ? (
+            {props.keyDecryptFailed && !key ? (
+              <p className="mt-1 text-xs text-red-500">{t("keyDecryptFailed")}</p>
+            ) : null}
+            {props.maskedKey && !key && !props.keyDecryptFailed ? (
               <p className="mt-1 text-xs text-muted-foreground">
                 {t("currentlySaved", { maskedKey: props.maskedKey })}
               </p>
+            ) : null}
+            {keyChanged && key ? (
+              <p className="mt-1 text-xs text-amber-500">{t("keyChangedWarning")}</p>
             ) : null}
           </div>
 
@@ -358,8 +414,9 @@ function SystemSettingsForm(props: {
 }) {
   const t = useTranslations("settings");
   const [asrModel, setAsrModel] = useState(props.initialSettings.asr_model ?? "base");
-  const [ffmpegBin, setFfmpegBin] = useState(props.initialSettings.ffmpeg_path ?? "ffmpeg");
-  const [ffprobeBin, setFfprobeBin] = useState(props.initialSettings.ffprobe_path ?? "ffprobe");
+  const [ffmpegBin, setFfmpegBin] = useState(props.initialSettings.ffmpeg_path ?? "");
+  const [ffprobeBin, setFfprobeBin] = useState(props.initialSettings.ffprobe_path ?? "");
+  const [modelStatus, setModelStatus] = useState<WhisperModelStatus | null>(null);
   const [whisperBin, setWhisperBin] = useState(props.initialSettings.whisper_bin ?? "");
   const [whisperModelDir, setWhisperModelDir] = useState(props.initialSettings.whisper_model_dir ?? "");
   const [mockProviders, setMockProviders] = useState(props.initialSettings.mock_providers ?? true);
@@ -377,8 +434,8 @@ function SystemSettingsForm(props: {
 
   useEffect(() => {
     setAsrModel(props.initialSettings.asr_model ?? "base");
-    setFfmpegBin(props.initialSettings.ffmpeg_path ?? "ffmpeg");
-    setFfprobeBin(props.initialSettings.ffprobe_path ?? "ffprobe");
+    setFfmpegBin(props.initialSettings.ffmpeg_path ?? "");
+    setFfprobeBin(props.initialSettings.ffprobe_path ?? "");
     setWhisperBin(props.initialSettings.whisper_bin ?? "");
     setWhisperModelDir(props.initialSettings.whisper_model_dir ?? "");
     setMockProviders(props.initialSettings.mock_providers ?? true);
@@ -390,6 +447,23 @@ function SystemSettingsForm(props: {
     setS3SecretKey("");
   }, [props.initialSettings]);
 
+  useEffect(() => {
+    getWhisperModelStatus(asrModel)
+      .then(setModelStatus)
+      .catch(() => setModelStatus(null));
+  }, [asrModel, props.tools]);
+
+  async function handleRecheck() {
+    try {
+      await ensureWhisperModel(asrModel);
+    } catch {
+      // check_ffmpeg surfaces errors in the tool list.
+    }
+    await props.onRefresh();
+    const status = await getWhisperModelStatus(asrModel).catch(() => null);
+    setModelStatus(status);
+  }
+
   async function handleSave(event: React.FormEvent) {
     event.preventDefault();
     setSaving(true);
@@ -397,8 +471,8 @@ function SystemSettingsForm(props: {
     try {
       const saved = await updateSettings({
         workspace_root: props.initialSettings.workspace_root,
-        ffmpeg_path: ffmpegBin,
-        ffprobe_path: ffprobeBin,
+        ffmpeg_path: ffmpegBin.trim() || undefined,
+        ffprobe_path: ffprobeBin.trim() || undefined,
         asr_model: asrModel,
         mock_providers: mockProviders,
         whisper_bin: whisperBin.trim() || undefined,
@@ -470,7 +544,7 @@ function SystemSettingsForm(props: {
                 id="whisperBin"
                 value={whisperBin}
                 onChange={(event) => setWhisperBin(event.target.value)}
-                placeholder="whisper-cli"
+                placeholder={t("system.whisperBinPlaceholder")}
                 className="mt-1.5"
               />
               <p className="mt-1.5 text-xs text-muted-foreground">{t("system.whisperBinHint")}</p>
@@ -494,7 +568,7 @@ function SystemSettingsForm(props: {
                 id="ffmpegBin"
                 value={ffmpegBin}
                 onChange={(event) => setFfmpegBin(event.target.value)}
-                placeholder="ffmpeg"
+                placeholder={t("system.ffmpegPlaceholder")}
                 className="mt-1.5"
               />
               <p className="mt-1.5 text-xs text-muted-foreground">{t("system.ffmpegHint")}</p>
@@ -506,7 +580,7 @@ function SystemSettingsForm(props: {
                 id="ffprobeBin"
                 value={ffprobeBin}
                 onChange={(event) => setFfprobeBin(event.target.value)}
-                placeholder="ffprobe"
+                placeholder={t("system.ffprobePlaceholder")}
                 className="mt-1.5"
               />
               <p className="mt-1.5 text-xs text-muted-foreground">{t("system.ffprobeHint")}</p>
@@ -606,7 +680,7 @@ function SystemSettingsForm(props: {
       <Card>
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle>{t("system.externalTools")}</CardTitle>
-          <Button type="button" variant="outline" size="sm" onClick={() => props.onRefresh()}>
+          <Button type="button" variant="outline" size="sm" onClick={handleRecheck}>
             <RefreshCw className="mr-2 size-4" />
             {t("system.recheck")}
           </Button>
@@ -619,9 +693,27 @@ function SystemSettingsForm(props: {
               className={tool.found ? "rounded-md border border-emerald-400/20 bg-emerald-500/5 px-3 py-2 text-sm" : "rounded-md border border-red-400/20 bg-red-500/5 px-3 py-2 text-sm"}
             >
               <div className="flex items-center justify-between gap-3">
-                <strong>{tool.name}</strong>
-                <span className="text-muted-foreground">{tool.path ?? tool.error}</span>
+                <strong className="flex items-center gap-2">
+                  {tool.name}
+                  {tool.bundled ? (
+                    <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-xs font-normal text-emerald-300">
+                      {t("system.bundled")}
+                    </span>
+                  ) : null}
+                </strong>
+                <span className="text-right text-muted-foreground">{tool.path ?? tool.error}</span>
               </div>
+              {tool.name === "whisper" && modelStatus ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {modelStatus.downloading
+                    ? t("system.downloadingModel")
+                    : modelStatus.downloaded
+                      ? t("system.modelReady", { model: modelStatus.model_name })
+                      : modelStatus.error
+                        ? modelStatus.error
+                        : t("system.modelPending", { model: modelStatus.model_name })}
+                </p>
+              ) : null}
             </div>
           ))}
         </CardContent>
