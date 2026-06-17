@@ -213,6 +213,12 @@ export type ProviderCredentialPayload = {
   model: string;
 };
 
+export type PickedVideoFile = {
+  path: string;
+  name: string;
+  size_bytes: number;
+};
+
 export type PipelineEvent =
   | { event: "run"; run_id: string; task_id: string; status: string }
   | { event: "stage"; run_id: string; stage: string; status: string }

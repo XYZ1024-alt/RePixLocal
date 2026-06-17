@@ -1,89 +1,110 @@
-import { EmptyState } from "./EmptyState";
-import type { DashboardSummary, Task } from "../types";
+const MIN_VISIBLE_BAR = 4;
+const GRID_LINES = 4;
 
-export function StackedBarChart() {
-  return <EmptyState message="No daily output data yet" />;
-}
+type DonutSlice = {
+  label: string;
+  value: number;
+  color: string;
+};
 
-export function PipelineDonutChart(props: { summary: DashboardSummary | null }) {
-  if (!props.summary) {
-    return <EmptyState message="No pipeline data yet" />;
-  }
+type TrendPoint = {
+  label: string;
+  value: number;
+};
 
-  const { running_tasks, draft_tasks, failed_tasks, completed_tasks } = props.summary;
-  const total = running_tasks + draft_tasks + failed_tasks + completed_tasks;
-
-  if (total === 0) {
-    return <EmptyState message="No pipeline data yet" />;
-  }
-
-  const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0);
-  const r1 = pct(running_tasks);
-  const r2 = r1 + pct(draft_tasks);
-  const r3 = r2 + pct(failed_tasks);
-
-  const gradient = `conic-gradient(
-    var(--blue) 0 ${r1}%,
-    var(--cyan) ${r1}% ${r2}%,
-    var(--red) ${r2}% ${r3}%,
-    var(--green) ${r3}% 100%
-  )`;
+export function DonutChart({
+  slices,
+  size = 148,
+  centerLabel
+}: {
+  slices: DonutSlice[];
+  size?: number;
+  centerLabel: string;
+}) {
+  const total = slices.reduce((sum, slice) => sum + slice.value, 0);
+  const stops = getDonutStops(slices, total);
 
   return (
-    <div className="donut-wrap">
-      <div className="donut" style={{ background: gradient }}>
-        <strong>{total}</strong>
-        <span>Total</span>
+    <div className="flex items-center gap-7">
+      <div
+        className="relative shrink-0 rounded-full shadow-[0_0_32px_rgba(37,99,235,0.18)]"
+        style={{ width: size, height: size, background: `conic-gradient(${stops})` }}
+      >
+        <div className="absolute inset-[23%] rounded-full bg-[#0b1726] ring-1 ring-white/[0.08]" />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-2xl font-semibold tabular-nums">{total}</div>
+            <div className="text-[10px] uppercase text-muted-foreground">{centerLabel}</div>
+          </div>
+        </div>
       </div>
-      <div className="legend-list">
-        <LegendRow color="var(--blue)" label="Running" pct={Math.round(pct(running_tasks))} value={running_tasks} />
-        <LegendRow color="var(--cyan)" label="Queued" pct={Math.round(pct(draft_tasks))} value={draft_tasks} />
-        <LegendRow color="var(--red)" label="Failed" pct={Math.round(pct(failed_tasks))} value={failed_tasks} />
-        <LegendRow color="var(--green)" label="Completed" pct={Math.round(pct(completed_tasks))} value={completed_tasks} />
+      <ul className="flex min-w-36 flex-col gap-2.5 text-xs">
+        {slices.map((slice) => (
+          <li key={slice.label} className="flex items-center gap-2">
+            <span className="size-2.5 shrink-0 rounded-full" style={{ background: slice.color }} />
+            <span className="text-muted-foreground">{slice.label}</span>
+            <span className="ml-auto font-semibold tabular-nums">{slice.value}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export function BarChart({ data }: { data: TrendPoint[] }) {
+  const max = Math.max(1, ...data.map((point) => point.value));
+
+  return (
+    <div className="relative h-52 overflow-hidden rounded-md border border-white/5 bg-[#0a1523] px-4 pb-3 pt-6">
+      <ChartGrid />
+      <div className="relative z-10 flex h-full items-end gap-3">
+        {data.map((point) => (
+          <div key={point.label} className="flex flex-1 flex-col items-center gap-2">
+            <span className="text-[10px] font-medium tabular-nums text-muted-foreground">{point.value}</span>
+            <div className="flex h-36 w-full items-end">
+              <div
+                className="w-full rounded-t-sm bg-cyan-400 shadow-[0_0_18px_rgba(34,211,238,0.36)]"
+                style={{ height: `${getBarHeight(point.value, max)}%` }}
+              />
+            </div>
+            <span className="text-[10px] text-muted-foreground">{point.label}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-export function ProcessingQueues(props: { tasks: Task[] }) {
-  const running = props.tasks.filter((task) => task.status === "running");
-
-  if (running.length === 0) {
-    return <EmptyState message="No active processing queues" />;
-  }
-
+function ChartGrid() {
   return (
-    <div className="queue-list">
-      {running.map((task) => (
-        <div className="queue-row" key={task.id}>
-          <div className="queue-row-head">
-            <span>{task.title}</span>
-            <strong>—</strong>
-          </div>
-          <div className="progress-track">
-            <span className="progress-fill" style={{ width: "0%" }} />
-          </div>
-          <small>Status: {task.status}</small>
-        </div>
+    <div className="pointer-events-none absolute inset-x-4 top-6 bottom-9">
+      {Array.from({ length: GRID_LINES }).map((_, index) => (
+        <span
+          key={index}
+          className="absolute left-0 w-full border-t border-white/[0.06]"
+          style={{ top: `${(index / (GRID_LINES - 1)) * 100}%` }}
+        />
       ))}
     </div>
   );
 }
 
-export function ApiBudgetBars() {
-  return <EmptyState message="API usage tracking not configured" />;
+function getBarHeight(value: number, max: number) {
+  if (value <= 0) return 0;
+  return Math.max((value / max) * 100, MIN_VISIBLE_BAR);
 }
 
-function LegendRow(props: { color: string; label: string; value: number; pct: number }) {
-  return (
-    <div className="legend-row detailed">
-      <span className="legend-dot-item">
-        <span className="legend-dot" style={{ background: props.color }} />
-        {props.label}
-      </span>
-      <span>
-        <strong>{props.value}</strong> ({props.pct}%)
-      </span>
-    </div>
-  );
+function getDonutStops(slices: DonutSlice[], total: number) {
+  if (total === 0) return "var(--secondary) 0 100%";
+
+  let acc = 0;
+  return slices
+    .filter((slice) => slice.value > 0)
+    .map((slice) => {
+      const start = (acc / total) * 100;
+      acc += slice.value;
+      const end = (acc / total) * 100;
+      return `${slice.color} ${start}% ${end}%`;
+    })
+    .join(", ");
 }

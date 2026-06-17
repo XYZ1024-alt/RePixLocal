@@ -264,6 +264,13 @@ pub struct SubmitTaskResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PickedVideoFile {
+    pub path: String,
+    pub name: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderCostSummary {
     pub provider: String,
     pub calls: i64,

@@ -10,6 +10,7 @@ import type {
   PipelineStage,
   ProviderCredentialPayload,
   ProviderCredentialView,
+  PickedVideoFile,
   ProviderModelOption,
   RunDetail,
   RunListItem,
@@ -101,4 +102,8 @@ export async function listRunStages(runId: string) {
 
 export async function listAllAssets(taskId?: string) {
   return invoke<Asset[]>("list_all_assets", { taskId: taskId ?? null });
+}
+
+export async function pickVideoFile() {
+  return invoke<PickedVideoFile | null>("pick_video_file");
 }

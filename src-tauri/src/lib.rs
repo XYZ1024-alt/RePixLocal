@@ -15,7 +15,8 @@ use commands::{
     cancel_task, check_ffmpeg, create_task, get_dashboard_data, get_dashboard_summary,
     get_latest_run, get_run, get_run_costs, get_settings, get_task, list_all_assets, list_assets,
     list_logs, list_provider_credentials, list_provider_models, list_run_stages, list_runs,
-    list_tasks, save_provider_credential, start_task, submit_task, test_provider, update_settings,
+    list_tasks, pick_video_file, save_provider_credential, start_task, submit_task, test_provider,
+    update_settings,
 };
 use state::AppState;
 
@@ -49,7 +50,8 @@ pub fn run() {
             save_provider_credential,
             list_provider_credentials,
             list_provider_models,
-            test_provider
+            test_provider,
+            pick_video_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running RePix Local");

@@ -3,9 +3,9 @@ use tauri::{AppHandle, State};
 use crate::config::{save, AppConfig};
 use crate::errors::command_error;
 use crate::models::{
-    AppLog, Asset, CostSummary, CreateTaskInput, DashboardData, DashboardSummary, PipelineRun,
-    PipelineStage, ProviderCredentialInput, ProviderCredentialView, ProviderModelOption, RunDetail,
-    RunListItem, SubmitTaskResponse, Task, ToolCheck,
+    AppLog, Asset, CostSummary, CreateTaskInput, DashboardData, DashboardSummary, PickedVideoFile,
+    PipelineRun, PipelineStage, ProviderCredentialInput, ProviderCredentialView,
+    ProviderModelOption, RunDetail, RunListItem, SubmitTaskResponse, Task, ToolCheck,
 };
 use crate::providers::{catalog, validate_provider_config, ProviderConfig};
 use crate::state::AppState;
@@ -209,4 +209,24 @@ pub async fn list_provider_models(provider: String) -> Result<Vec<ProviderModelO
 #[tauri::command]
 pub async fn test_provider(config: ProviderConfig) -> Result<(), String> {
     validate_provider_config(&config).map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn pick_video_file() -> Result<Option<PickedVideoFile>, String> {
+    let picked = rfd::AsyncFileDialog::new()
+        .add_filter("Video", &["mp4", "mov"])
+        .pick_file()
+        .await;
+    let Some(file) = picked else {
+        return Ok(None);
+    };
+    let path = file.path().to_path_buf();
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|error| command_error(crate::errors::AppError::Filesystem(error)))?;
+    Ok(Some(PickedVideoFile {
+        path: path.to_string_lossy().to_string(),
+        name: file.file_name(),
+        size_bytes: metadata.len(),
+    }))
 }

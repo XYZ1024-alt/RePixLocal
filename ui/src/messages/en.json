@@ -290,7 +290,9 @@
         "small": "Small (balanced)",
         "medium": "Medium (slower, better quality)",
         "large-v3": "Large-v3 (best quality, slowest)"
-      }
+      },
+      "externalTools": "External Tools",
+      "recheck": "Re-check"
     },
     "fetchModels": "Fetch Available Models",
     "fetchingModels": "Loading...",

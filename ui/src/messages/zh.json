@@ -290,7 +290,9 @@
         "small": "Small（均衡）",
         "medium": "Medium（较慢，质量更好）",
         "large-v3": "Large-v3（质量最佳，最慢）"
-      }
+      },
+      "externalTools": "外部工具",
+      "recheck": "重新检测"
     },
     "fetchModels": "获取可用模型",
     "fetchingModels": "加载中...",

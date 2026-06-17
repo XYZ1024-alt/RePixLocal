@@ -395,14 +395,23 @@ impl Repository {
     pub async fn save_provider_credential(&self, input: ProviderCredentialInput) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         let provider = input.provider.to_uppercase();
-        let encrypted_key = encrypt_secret(&input.api_key)?;
         let existing = sqlx::query(
-            "SELECT id FROM provider_credentials WHERE provider = ? AND label = ?",
+            "SELECT id, encrypted_key FROM provider_credentials WHERE provider = ? AND label = ?",
         )
         .bind(&provider)
         .bind(&input.label)
         .fetch_optional(&self.pool)
         .await?;
+        let encrypted_key = if input.api_key.trim().is_empty() {
+            let Some(row) = &existing else {
+                return Err(crate::errors::AppError::Provider(
+                    "API key is required".into(),
+                ));
+            };
+            row.try_get("encrypted_key")?
+        } else {
+            encrypt_secret(&input.api_key)?
+        };
         if let Some(row) = existing {
             let id: String = row.try_get("id")?;
             sqlx::query(

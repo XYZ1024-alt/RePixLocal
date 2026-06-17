@@ -3,7 +3,7 @@ import { AlertTriangle } from "lucide-react";
 import {
   cancelTask,
   checkFfmpeg,
-  getDashboardSummary,
+  getDashboardData,
   getLatestRun,
   getSettings,
   listAllAssets,
@@ -18,7 +18,17 @@ import { PipelineConsoleView } from "./views/PipelineConsoleView";
 import { AssetLibraryView } from "./views/AssetLibraryView";
 import { SettingsView } from "./views/SettingsView";
 import { ConsoleDetailPlaceholder } from "./views/ConsoleDetailPlaceholder";
-import type { AppLog, Asset, DashboardSummary, PipelineRun, PipelineStage, Settings, Task, ToolCheck, ViewKey } from "./types";
+import type {
+  AppLog,
+  Asset,
+  DashboardData,
+  PipelineRun,
+  PipelineStage,
+  Settings,
+  Task,
+  ToolCheck,
+  ViewKey
+} from "./types";
 
 export function App() {
   const [view, setView] = useState<ViewKey>("dashboard");
@@ -29,7 +39,7 @@ export function App() {
   const [run, setRun] = useState<PipelineRun | null>(null);
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [settings, setSettings] = useState<Settings>({ workspace_root: "" });
   const [tools, setTools] = useState<ToolCheck[]>([]);
   const [message, setMessage] = useState("");
@@ -54,17 +64,17 @@ export function App() {
   }, []);
 
   const refresh = useCallback(async () => {
-    const [nextTasks, nextSettings, nextTools, nextSummary, nextAssets] = await Promise.all([
+    const [nextTasks, nextSettings, nextTools, nextDashboard, nextAssets] = await Promise.all([
       listTasks(),
       getSettings(),
       checkFfmpeg(),
-      getDashboardSummary(),
+      getDashboardData(),
       listAllAssets()
     ]);
     setTasks(nextTasks);
     setSettings(nextSettings);
     setTools(nextTools);
-    setSummary(nextSummary);
+    setDashboardData(nextDashboard);
     setAssets(nextAssets);
 
     const nextSelectedTaskId =
@@ -105,6 +115,15 @@ export function App() {
     }
   }
 
+  function navigateToWizard() {
+    navigate("wizard");
+  }
+
+  function navigateToConsoleDetail(runId: string) {
+    setSelectedRunId(runId);
+    setView("console-detail");
+  }
+
   async function handleSelectTask(taskId: string) {
     setSelectedTaskId(taskId);
     await loadTaskDetails(taskId).catch((error) => setMessage(String(error)));
@@ -116,11 +135,18 @@ export function App() {
     await loadTaskDetails(taskId).catch((error) => setMessage(String(error)));
   }
 
+  async function handleWizardSubmitted(runId: string) {
+    await refresh();
+    navigateToConsoleDetail(runId);
+  }
+
   return (
     <Shell activeView={view} hasError={Boolean(message)} onNavigate={navigate}>
       {message && <ErrorBanner message={message} onDismiss={() => setMessage("")} />}
-      {view === "dashboard" && <DashboardView summary={summary} tasks={tasks} />}
-      {view === "wizard" && <TaskWizardView onCreated={refresh} onMessage={setMessage} />}
+      {view === "dashboard" && (
+        <DashboardView data={dashboardData} onNewTask={navigateToWizard} />
+      )}
+      {view === "wizard" && <TaskWizardView onSubmitted={handleWizardSubmitted} />}
       {view === "console" && (
         <PipelineConsoleView
           logs={logs}
@@ -143,7 +169,16 @@ export function App() {
         />
       )}
       {view === "settings" && (
-        <SettingsView settings={settings} tools={tools} onRefresh={refresh} onMessage={setMessage} />
+        <SettingsView
+          settings={settings}
+          tools={tools}
+          onRefresh={async () => {
+            const nextTools = await checkFfmpeg();
+            setTools(nextTools);
+          }}
+          onSettingsSaved={setSettings}
+          onMessage={setMessage}
+        />
       )}
     </Shell>
   );
