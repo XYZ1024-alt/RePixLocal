@@ -5,7 +5,7 @@ use tokio::fs;
 use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
-use crate::models::{Asset, AssetType};
+use crate::models::{Asset, AssetStatus, AssetType};
 use crate::workspace::Workspace;
 
 #[derive(Debug, Clone)]
@@ -62,6 +62,7 @@ fn source_asset(task_id: &str, path: PathBuf) -> Asset {
         path: path.to_string_lossy().to_string(),
         mime_type: Some("video/*".to_string()),
         scene_index: None,
+        status: Some(AssetStatus::Ready),
         created_at: Utc::now(),
     }
 }

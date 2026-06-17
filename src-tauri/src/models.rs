@@ -31,7 +31,7 @@ pub enum StageStatus {
     Canceled,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StageType {
     TranscriptExtraction,
@@ -54,6 +54,15 @@ pub enum AssetType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetStatus {
+    Pending,
+    Generating,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
     pub title: String,
@@ -73,6 +82,7 @@ pub struct PipelineRun {
     pub error: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +92,7 @@ pub struct PipelineStage {
     pub stage_type: StageType,
     pub status: StageStatus,
     pub error: Option<String>,
+    pub order_index: Option<i32>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
 }
@@ -95,6 +106,7 @@ pub struct Asset {
     pub path: String,
     pub mime_type: Option<String>,
     pub scene_index: Option<i32>,
+    pub status: Option<AssetStatus>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -144,4 +156,127 @@ pub struct ToolCheck {
     pub found: bool,
     pub path: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderModelOption {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderCredentialConfig {
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderCredentialView {
+    pub provider: String,
+    pub masked_key: String,
+    pub config: Option<ProviderCredentialConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunListItem {
+    pub id: String,
+    pub task_id: String,
+    pub title: String,
+    pub status: String,
+    pub current_stage: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunDetailLog {
+    pub ts: String,
+    pub level: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunDetailStage {
+    pub stage_type: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub order_index: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunDetail {
+    pub id: String,
+    pub task_id: String,
+    pub task_title: String,
+    pub status: String,
+    pub current_stage: Option<String>,
+    pub error: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub created_at: Option<String>,
+    pub stages: Vec<RunDetailStage>,
+    pub logs: Vec<RunDetailLog>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardStats {
+    pub total_tasks: i64,
+    pub running: i64,
+    pub completed: i64,
+    pub success_rate: i64,
+    pub assets_ready: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrendPoint {
+    pub date: String,
+    pub value: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueItem {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub current_stage: Option<String>,
+    pub progress: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageItem {
+    pub provider: String,
+    pub calls: i64,
+    pub quantity: f64,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardData {
+    pub stats: DashboardStats,
+    pub status_count: std::collections::HashMap<String, i64>,
+    pub trend: Vec<TrendPoint>,
+    pub queue: Vec<QueueItem>,
+    pub usage: Vec<UsageItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitTaskResponse {
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderCostSummary {
+    pub provider: String,
+    pub calls: i64,
+    pub failed_calls: i64,
+    pub quantity: f64,
+    pub unit: String,
+    pub cost_usd: f64,
+    pub unknown_cost_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostSummary {
+    pub total_cost_usd: f64,
+    pub incomplete: bool,
+    pub providers: Vec<ProviderCostSummary>,
 }

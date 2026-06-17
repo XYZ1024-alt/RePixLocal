@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub workspace_root: String,
     pub ffmpeg_path: Option<String>,
     pub ffprobe_path: Option<String>,
+    pub asr_model: Option<String>,
 }
 
 impl AppConfig {
@@ -17,6 +18,7 @@ impl AppConfig {
             workspace_root: workspace.root().to_string_lossy().to_string(),
             ffmpeg_path: None,
             ffprobe_path: None,
+            asr_model: Some("base".to_string()),
         }
     }
 }

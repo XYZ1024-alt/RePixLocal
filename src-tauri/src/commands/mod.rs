@@ -1,12 +1,13 @@
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::config::{save, AppConfig};
 use crate::errors::command_error;
 use crate::models::{
-    AppLog, Asset, CreateTaskInput, DashboardSummary, PipelineRun, PipelineStage,
-    ProviderCredentialInput, Task, ToolCheck,
+    AppLog, Asset, CostSummary, CreateTaskInput, DashboardData, DashboardSummary, PipelineRun,
+    PipelineStage, ProviderCredentialInput, ProviderCredentialView, ProviderModelOption, RunDetail,
+    RunListItem, SubmitTaskResponse, Task, ToolCheck,
 };
-use crate::providers::{validate_provider_config, ProviderConfig};
+use crate::providers::{catalog, validate_provider_config, ProviderConfig};
 use crate::state::AppState;
 
 #[tauri::command]
@@ -28,6 +29,11 @@ pub async fn get_dashboard_summary(state: State<'_, AppState>) -> Result<Dashboa
 }
 
 #[tauri::command]
+pub async fn get_dashboard_data(state: State<'_, AppState>) -> Result<DashboardData, String> {
+    state.repo.dashboard_data().await.map_err(command_error)
+}
+
+#[tauri::command]
 pub async fn get_task(task_id: String, state: State<'_, AppState>) -> Result<Option<Task>, String> {
     state.repo.get_task(&task_id).await.map_err(command_error)
 }
@@ -41,16 +47,72 @@ pub async fn get_latest_run(
 }
 
 #[tauri::command]
-pub async fn start_task(
-    task_id: String,
+pub async fn list_runs(
+    limit: Option<i64>,
     state: State<'_, AppState>,
-) -> Result<PipelineRun, String> {
-    state.workflow.start(&task_id).await.map_err(command_error)
+) -> Result<Vec<RunListItem>, String> {
+    state
+        .repo
+        .list_runs(limit.unwrap_or(100))
+        .await
+        .map_err(command_error)
 }
 
 #[tauri::command]
-pub async fn cancel_task(task_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.workflow.cancel(&task_id).await.map_err(command_error)
+pub async fn get_run(run_id: String, state: State<'_, AppState>) -> Result<Option<RunDetail>, String> {
+    state.repo.get_run(&run_id).await.map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn get_run_costs(
+    run_id: String,
+    state: State<'_, AppState>,
+) -> Result<CostSummary, String> {
+    state
+        .repo
+        .get_run_cost_summary(&run_id)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn start_task(
+    task_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<PipelineRun, String> {
+    state
+        .workflow
+        .start(&task_id, &app)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn submit_task(
+    task_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<SubmitTaskResponse, String> {
+    let run = state
+        .workflow
+        .start(&task_id, &app)
+        .await
+        .map_err(command_error)?;
+    Ok(SubmitTaskResponse { run_id: run.id })
+}
+
+#[tauri::command]
+pub async fn cancel_task(
+    task_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .workflow
+        .cancel(&task_id, &app)
+        .await
+        .map_err(command_error)
 }
 
 #[tauri::command]
@@ -126,6 +188,22 @@ pub async fn save_provider_credential(
         .save_provider_credential(input)
         .await
         .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn list_provider_credentials(
+    state: State<'_, AppState>,
+) -> Result<Vec<ProviderCredentialView>, String> {
+    state
+        .repo
+        .list_provider_credentials()
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn list_provider_models(provider: String) -> Result<Vec<ProviderModelOption>, String> {
+    Ok(catalog::list_provider_models(&provider))
 }
 
 #[tauri::command]
