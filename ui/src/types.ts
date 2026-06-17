@@ -218,6 +218,7 @@ export type Settings = {
   s3_access_key?: string;
   s3_secret_key?: string;
   s3_secret_configured?: boolean;
+  s3_secret_decrypt_failed?: boolean;
 };
 
 export type CreateTaskPayload = {

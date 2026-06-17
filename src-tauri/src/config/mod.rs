@@ -29,6 +29,8 @@ pub struct AppConfig {
     pub s3_secret_configured: bool,
     #[serde(default, skip_serializing)]
     pub s3_secret_key: Option<String>,
+    #[serde(default, skip_serializing, skip_deserializing)]
+    pub s3_secret_decrypt_failed: bool,
 }
 
 fn default_mock_providers() -> bool {
@@ -52,6 +54,7 @@ impl AppConfig {
             s3_secret_key_encrypted: None,
             s3_secret_configured: false,
             s3_secret_key: None,
+            s3_secret_decrypt_failed: false,
         }
     }
 }
@@ -69,19 +72,20 @@ pub async fn load_or_create(workspace: &Workspace) -> AppResult<AppConfig> {
     let path = workspace.config_path();
     if !path.exists() {
         let config = AppConfig::default_for(workspace);
-        save(workspace, &config).await?;
-        return Ok(config);
+        let persisted = save(workspace, &config).await?;
+        return Ok(persisted);
     }
 
     let bytes = fs::read(path).await?;
     Ok(serde_json::from_slice(&bytes)?)
 }
 
-pub async fn save(workspace: &Workspace, config: &AppConfig) -> AppResult<()> {
+pub async fn save(workspace: &Workspace, config: &AppConfig) -> AppResult<AppConfig> {
     let mut persisted = config.clone();
     merge_secret_on_save(&mut persisted)?;
     persisted.s3_secret_key = None;
+    persisted.s3_secret_decrypt_failed = false;
     let bytes = serde_json::to_vec_pretty(&persisted)?;
     fs::write(workspace.config_path(), bytes).await?;
-    Ok(())
+    Ok(persisted)
 }

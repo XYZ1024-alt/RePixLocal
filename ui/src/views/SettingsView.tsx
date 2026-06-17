@@ -428,6 +428,9 @@ function SystemSettingsForm(props: {
   const [s3SecretConfigured, setS3SecretConfigured] = useState(
     props.initialSettings.s3_secret_configured ?? false
   );
+  const [s3SecretDecryptFailed, setS3SecretDecryptFailed] = useState(
+    props.initialSettings.s3_secret_decrypt_failed ?? false
+  );
   const [showS3Secret, setShowS3Secret] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -444,6 +447,7 @@ function SystemSettingsForm(props: {
     setS3Bucket(props.initialSettings.s3_bucket ?? "");
     setS3AccessKey(props.initialSettings.s3_access_key ?? "");
     setS3SecretConfigured(props.initialSettings.s3_secret_configured ?? false);
+    setS3SecretDecryptFailed(props.initialSettings.s3_secret_decrypt_failed ?? false);
     setS3SecretKey("");
   }, [props.initialSettings]);
 
@@ -485,6 +489,7 @@ function SystemSettingsForm(props: {
       });
       props.onSaved(saved);
       setS3SecretConfigured(saved.s3_secret_configured ?? false);
+      setS3SecretDecryptFailed(saved.s3_secret_decrypt_failed ?? false);
       setS3SecretKey("");
       setMessage({ type: "success", text: t("system.saved") });
       window.setTimeout(() => setMessage(null), 3000);
@@ -643,7 +648,9 @@ function SystemSettingsForm(props: {
                   <Input
                     id="s3SecretKey"
                     type={showS3Secret ? "text" : "password"}
-                    placeholder={s3SecretConfigured ? "********" : ""}
+                    placeholder={
+                      s3SecretDecryptFailed ? "" : s3SecretConfigured ? "********" : ""
+                    }
                     value={s3SecretKey}
                     onChange={(event) => setS3SecretKey(event.target.value)}
                     className="pr-10"
@@ -656,7 +663,10 @@ function SystemSettingsForm(props: {
                     {showS3Secret ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
                 </div>
-                {s3SecretConfigured && !s3SecretKey ? (
+                {s3SecretDecryptFailed && !s3SecretKey ? (
+                  <p className="mt-1 text-xs text-red-500">{t("system.s3SecretDecryptFailed")}</p>
+                ) : null}
+                {s3SecretConfigured && !s3SecretKey && !s3SecretDecryptFailed ? (
                   <p className="mt-1 text-xs text-muted-foreground">{t("system.s3SecretConfigured")}</p>
                 ) : null}
               </div>

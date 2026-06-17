@@ -125,7 +125,12 @@ pub fn merge_secret_on_save(config: &mut AppConfig) -> AppResult<()> {
 }
 
 pub fn sanitize_config_for_ui(mut config: AppConfig) -> AppConfig {
-    config.s3_secret_configured = config.s3_secret_key_encrypted.is_some();
+    config.s3_secret_decrypt_failed = config
+        .s3_secret_key_encrypted
+        .as_deref()
+        .is_some_and(|encrypted| decrypt_secret(encrypted).is_err());
+    config.s3_secret_configured =
+        config.s3_secret_key_encrypted.is_some() && !config.s3_secret_decrypt_failed;
     config.s3_secret_key_encrypted = None;
     config.s3_secret_key = None;
     config

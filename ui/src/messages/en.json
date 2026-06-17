@@ -308,6 +308,7 @@
       "s3AccessKey": "Access Key",
       "s3SecretKey": "Secret Key",
       "s3SecretConfigured": "Secret key is saved. Leave blank to keep the current value.",
+      "s3SecretDecryptFailed": "Saved secret key cannot be decrypted. Re-enter your S3 secret key and save.",
       "saved": "System settings saved successfully",
       "save": "Save System Settings",
       "whisperOptions": {

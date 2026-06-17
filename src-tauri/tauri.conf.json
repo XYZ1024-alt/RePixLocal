@@ -25,7 +25,10 @@
         "enable": true,
         "scope": {
           "requireLiteralLeadingDot": false,
-          "allow": ["$LOCALDATA/local/RePix/RePixLocal/**/*"]
+          "allow": [
+            "$APPDATA/RePix/RePixLocal/**/*",
+            "$APPDATA/local/RePix/RePixLocal/**/*"
+          ]
         }
       }
     }
