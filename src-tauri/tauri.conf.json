@@ -26,8 +26,8 @@
         "scope": {
           "requireLiteralLeadingDot": false,
           "allow": [
-            "$APPDATA/RePix/RePixLocal/**/*",
-            "$APPDATA/local/RePix/RePixLocal/**/*"
+            "$DATA/RePix/RePixLocal/data/**/*",
+            "$DATA/local/RePix/RePixLocal/**/*"
           ]
         }
       }

@@ -19,6 +19,7 @@ use commands::{
     save_provider_credential, start_task, submit_task, test_provider, update_settings,
 };
 use state::AppState;
+use tauri::Manager;
 
 pub fn run() {
     tracing_subscriber::fmt::init();
@@ -26,13 +27,18 @@ pub fn run() {
         .expect("failed to initialize RePix Local state");
 
     tauri::Builder::default()
-        .setup(|_| {
+        .manage(state)
+        .setup(|app| {
             if let Err(error) = media::whisper_runtime::sync_whisper_runtime_near_exe() {
                 tracing::warn!("failed to sync whisper runtime DLLs: {error}");
             }
+            let app_state = app.state::<AppState>();
+            let workspace = app_state.workspace.root();
+            if let Err(error) = app.asset_protocol_scope().allow_directory(&workspace, true) {
+                tracing::warn!("failed to allow workspace in asset protocol: {error}");
+            }
             Ok(())
         })
-        .manage(state)
         .invoke_handler(tauri::generate_handler![
             create_task,
             get_dashboard_summary,
