@@ -81,7 +81,7 @@ impl WhisperRunner {
                 found: false,
                 path: Some(path.to_string_lossy().to_string()),
                 error: Some(
-                    "whisper runtime DLLs missing next to whisper-cli; rerun npm run fetch-tools and restart"
+                    "whisper runtime DLLs missing next to whisper-cli; rerun bun run fetch-tools and restart"
                         .into(),
                 ),
                 bundled: source == ToolSource::Bundled,

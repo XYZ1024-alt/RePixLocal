@@ -12,6 +12,7 @@ export type Task = {
   id: string;
   title: string;
   source_path: string;
+  task_type?: "replicate" | "image_to_video";
   status: TaskStatus;
   config_json: Record<string, unknown>;
   created_at: string;
@@ -235,7 +236,31 @@ export type ProviderCredentialPayload = {
   model: string;
 };
 
+export type DashscopeCredentialView = {
+  masked_key: string;
+  key_decrypt_failed?: boolean;
+  keys_mismatch?: boolean;
+  base_url?: string | null;
+  qwen_vl_model?: string | null;
+  tongyi_model?: string | null;
+  cosyvoice_model?: string | null;
+};
+
+export type DashscopeCredentialPayload = {
+  api_key: string;
+  base_url: string;
+  qwen_vl_model: string;
+  tongyi_model: string;
+  cosyvoice_model: string;
+};
+
 export type PickedVideoFile = {
+  path: string;
+  name: string;
+  size_bytes: number;
+};
+
+export type PickedImageFile = {
   path: string;
   name: string;
   size_bytes: number;

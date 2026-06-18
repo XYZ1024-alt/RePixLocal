@@ -1,9 +1,7 @@
 use serde_json::Value;
 
 use crate::errors::{AppError, AppResult};
-use crate::providers::http_client::{
-    build_http_client, build_http_client_direct, format_http_error,
-};
+use crate::providers::http_client::{build_http_client, format_http_error};
 use crate::models::{ProviderListingCredentials, ProviderModelOption};
 
 const DASHSCOPE_MODELS_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1/models";
@@ -27,6 +25,10 @@ pub fn mock_models(provider: &str) -> Vec<ProviderModelOption> {
             model_option("seedance-mock-1", "Seedance Mock 1"),
             model_option("seedance-mock-2", "Seedance Mock 2"),
         ],
+        "COSYVOICE" => vec![
+            model_option("cosyvoice-v3-flash", "cosyvoice-v3-flash"),
+            model_option("cosyvoice-v3-plus", "cosyvoice-v3-plus"),
+        ],
         _ => Vec::new(),
     }
 }
@@ -44,6 +46,7 @@ pub async fn fetch_models(
             fetch_dashscope_models(creds, &["wanx", "wan"], "Tongyi image").await
         }
         "SEEDANCE" => fetch_seedance_models(creds).await,
+        "COSYVOICE" => Ok(mock_models("COSYVOICE")),
         _ => Err(AppError::Provider(format!("unsupported provider: {provider}"))),
     }
 }
@@ -149,11 +152,7 @@ async fn fetch_seedance_models(creds: &ProviderListingCredentials) -> AppResult<
 }
 
 async fn get_models_json(url: &str, api_key: &str) -> AppResult<Value> {
-    let client = if uses_direct_connection(url) {
-        build_http_client_direct(30)?
-    } else {
-        build_http_client(30)?
-    };
+    let client = build_http_client(30)?;
     let response = client
         .get(url)
         .header("Authorization", format!("Bearer {api_key}"))
@@ -171,10 +170,6 @@ async fn get_models_json(url: &str, api_key: &str) -> AppResult<Value> {
         .json()
         .await
         .map_err(|error| AppError::Provider(error.to_string()))
-}
-
-fn uses_direct_connection(url: &str) -> bool {
-    url.contains("aliyuncs.com") || url.contains("volces.com")
 }
 
 fn model_option(id: &str, name: &str) -> ProviderModelOption {

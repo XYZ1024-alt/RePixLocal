@@ -71,6 +71,9 @@
     "stages": "阶段",
     "liveLog": "实时日志",
     "assetsTitle": "任务素材",
+    "finalOutputTitle": "成片输出",
+    "finalOutputHint": "任务已完成。成片在下方「成片」分区中，也可在资源管理器中直接打开。",
+    "openInFolder": "在文件夹中打开",
     "assetsEmpty": "该任务暂无素材。",
     "assetSigningError": "素材预览签名失败",
     "costsTitle": "本次任务成本",
@@ -109,9 +112,10 @@
   "assets": {
     "viewAll": "查看全部（{count}）",
     "sections": {
+      "final": "成片",
       "images": "图像（分镜帧）",
       "audio": "音频（配音和背景音乐）",
-      "videos": "视频（最终 MP4）",
+      "videos": "视频片段与源视频",
       "documents": "文档"
     },
     "types": {
@@ -126,8 +130,20 @@
     }
   },
   "wizard": {
-    "title": "新建复刻任务",
-    "description": "配置 AI 视频复刻流水线",
+    "title": "新建任务",
+    "description": "配置 AI 视频复刻或图生视频流水线",
+    "taskMode": "任务类型",
+    "sourceImages": "参考图片",
+    "pickImages": "选择图片",
+    "pickImagesDesc": "PNG / JPG / WebP，最多 20 张，顺序即场景顺序",
+    "requirements": "创作要求",
+    "requirementsPlaceholder": "例如：30 秒产品种草视频，口语化，突出轻便和续航",
+    "selectImagesFirst": "请先选择至少一张图片。",
+    "requirementsRequired": "请填写创作要求。",
+    "unsupportedImageType": "不支持的图片格式，请使用 PNG、JPG 或 WebP。",
+    "imageTooLarge": "单张图片不能超过 20MB。",
+    "tooManyImages": "最多只能选择 {count} 张图片。",
+    "sceneLabel": "场景 {index}",
     "sourceVideo": "源视频",
     "sourceVideoDesc": "MP4 或 MOV，最大 500MB。转写和音频会通过 faster-whisper 在本地提取。",
     "dragDrop": "将视频拖放到这里",
@@ -205,6 +221,14 @@
         "bottom": "底部",
         "center": "中间",
         "top": "顶部"
+      },
+      "taskType": {
+        "replicate": "视频复刻",
+        "image_to_video": "图生视频"
+      },
+      "taskTypeDesc": {
+        "replicate": "上传源视频，AI 复刻画面并用 TTS 配音",
+        "image_to_video": "上传多张图片和要求，AI 生成旁白与视频"
       }
     },
     "errors": {
@@ -222,7 +246,9 @@
   "stages": {
     "TRANSCRIPT_EXTRACTION": "转写与音频提取",
     "SCRIPT_REWRITE": "关键帧分析与文案改写",
+    "SCRIPT_PLANNING": "图片分析与脚本规划",
     "STORYBOARD_GENERATION": "通义分镜图生成",
+    "TTS_SYNTHESIS": "CosyVoice 配音合成",
     "SEGMENT_GENERATION": "Seedance 视频片段生成",
     "FINAL_RENDER": "FFmpeg 成片封装"
   },
@@ -275,11 +301,20 @@
     "fetchModelsToSelect": "请先点击「获取可用模型」",
     "mustFetchModels": "请先获取模型列表，然后从列表中选择模型",
     "advancedOptions": "高级选项",
+    "dashscope": {
+      "title": "DashScope（百炼）",
+      "description": "一个 API 密钥同时用于 Qwen-VL 视觉分析、通义万相分镜与 CosyVoice 配音",
+      "modelsHeading": "模型选择",
+      "qwenVlModel": "Qwen-VL 模型",
+      "tongyiModel": "通义万相模型",
+      "cosyvoiceModel": "CosyVoice 模型",
+      "allModelsRequired": "请为三项服务分别选择模型",
+      "keysMismatch": "检测到历史配置中密钥不一致，请重新保存以统一密钥",
+      "baseUrlHint": "默认北京地域 API，三项服务共用"
+    },
     "providerDesc": {
       "DEEPSEEK": "使用对话补全进行文案改写",
-      "QWEN_VL": "对源视频关键帧进行视觉分析",
-      "TONGYI": "图生图生成相似画面",
-      "SEEDANCE": "从图像生成视频片段"
+      "SEEDANCE": "从图像生成视频片段（火山引擎 Ark）"
     },
     "system": {
       "configuration": "系统配置",

@@ -4,7 +4,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::errors::{AppError, AppResult};
-use crate::models::TranscriptSegment;
+use crate::models::{Scene, TranscriptSegment};
 
 #[derive(Debug, Clone)]
 pub struct SubtitleCue {
@@ -24,7 +24,10 @@ pub struct AssStyle {
 }
 
 const DEFAULT_FONT: &str = "Noto Sans";
-const DEFAULT_FONT_SIZE: i32 = 32;
+const DEFAULT_FONT_SIZE: i32 = 52;
+const FONT_SIZE_HEIGHT_RATIO: f64 = 0.048;
+const MIN_AUTO_FONT_SIZE: i32 = 36;
+const MAX_AUTO_FONT_SIZE: i32 = 72;
 const DEFAULT_COLOR: &str = "#FFFFFF";
 const DEFAULT_POSITION: &str = "bottom";
 const DEFAULT_ASPECT_RATIO: &str = "16:9";
@@ -33,8 +36,8 @@ const HORIZONTAL_MARGIN_RATIO: f64 = 0.08;
 const VERTICAL_MARGIN_RATIO: f64 = 0.05;
 const MIN_SUBTITLE_MARGIN: i32 = 24;
 const MIN_LINE_CHAR_LIMIT: usize = 8;
-const OUTLINE_WIDTH: i32 = 2;
-const SHADOW_DEPTH: i32 = 1;
+const OUTLINE_WIDTH: i32 = 3;
+const SHADOW_DEPTH: i32 = 2;
 
 pub fn segments_to_json(segments: &[TranscriptSegment]) -> Value {
     Value::Array(
@@ -155,22 +158,56 @@ pub fn cues_from_segments(segments: &[TranscriptSegment]) -> Vec<SubtitleCue> {
         .collect()
 }
 
+pub fn cues_from_scenes_with_tts(scenes: &[Scene]) -> Vec<SubtitleCue> {
+    let mut sorted: Vec<&Scene> = scenes.iter().collect();
+    sorted.sort_by_key(|scene| scene.scene_index);
+    let mut cursor_ms = 0i64;
+    let mut cues = Vec::new();
+    for scene in sorted {
+        let text = scene.script_text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let duration_ms = scene_tts_duration_ms(scene).unwrap_or(3000);
+        let start_ms = cursor_ms;
+        let end_ms = start_ms + duration_ms;
+        cues.push(SubtitleCue {
+            start_sec: start_ms as f64 / 1000.0,
+            end_sec: end_ms as f64 / 1000.0,
+            text: text.to_string(),
+        });
+        cursor_ms = end_ms;
+    }
+    cues
+}
+
+fn scene_tts_duration_ms(scene: &Scene) -> Option<i64> {
+    scene
+        .metadata_json
+        .as_ref()
+        .and_then(|metadata| metadata.get("ttsDurationMs"))
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+}
+
 pub async fn build_ass(
     cues: &[SubtitleCue],
     out_path: &Path,
     style: &AssStyle,
+    video_size: Option<(i32, i32)>,
 ) -> AppResult<()> {
     if let Some(parent) = out_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    let (play_res_x, play_res_y) = play_resolution(style);
+    let (play_res_x, play_res_y) = resolve_play_resolution(style, video_size);
+    let font_size = auto_font_size(play_res_y);
     let (margin_l, margin_v) = subtitle_margins(play_res_x, play_res_y);
-    let char_limit = line_char_limit(play_res_x, margin_l, style.size);
+    let char_limit = line_char_limit(play_res_x, margin_l, font_size);
     let align = alignment(&style.position);
     let color = ass_color(&style.color);
     let mut content = build_header(
         &style.font,
-        style.size,
+        font_size,
         &color,
         align,
         (play_res_x, play_res_y),
@@ -186,6 +223,15 @@ pub async fn build_ass(
     Ok(())
 }
 
+fn resolve_play_resolution(style: &AssStyle, video_size: Option<(i32, i32)>) -> (i32, i32) {
+    if let Some((width, height)) = video_size {
+        if width > 0 && height > 0 {
+            return (width, height);
+        }
+    }
+    play_resolution(style)
+}
+
 fn play_resolution(style: &AssStyle) -> (i32, i32) {
     let key = (style.aspect_ratio.as_str(), style.resolution.as_str());
     let resolutions: HashMap<(&str, &str), (i32, i32)> = HashMap::from([
@@ -197,6 +243,12 @@ fn play_resolution(style: &AssStyle) -> (i32, i32) {
     *resolutions
         .get(&key)
         .unwrap_or(&(1920, 1080))
+}
+
+fn auto_font_size(play_res_y: i32) -> i32 {
+    ((play_res_y as f64) * FONT_SIZE_HEIGHT_RATIO)
+        .round()
+        .clamp(MIN_AUTO_FONT_SIZE as f64, MAX_AUTO_FONT_SIZE as f64) as i32
 }
 
 fn subtitle_margins(play_res_x: i32, play_res_y: i32) -> (i32, i32) {
@@ -275,15 +327,36 @@ fn wrap_line(line: &str, char_limit: usize) -> Vec<String> {
 }
 
 fn split_index(line: &str, char_limit: usize) -> usize {
-    if let Some(space_index) = line[..=char_limit].rfind(' ') {
-        if space_index >= MIN_LINE_CHAR_LIMIT {
+    let byte_limit = line
+        .char_indices()
+        .nth(char_limit)
+        .map(|(index, _)| index)
+        .unwrap_or(line.len());
+    let prefix = &line[..byte_limit];
+
+    if let Some(space_index) = prefix.rfind(' ') {
+        if prefix[..space_index].chars().count() >= MIN_LINE_CHAR_LIMIT {
             return space_index;
         }
     }
-    line.char_indices()
-        .nth(char_limit)
-        .map(|(index, _)| index)
-        .unwrap_or(line.len())
+
+    for (byte_index, ch) in prefix.char_indices().rev() {
+        if !is_wrap_break_char(ch) {
+            continue;
+        }
+        if prefix[..byte_index].chars().count() >= MIN_LINE_CHAR_LIMIT {
+            return byte_index + ch.len_utf8();
+        }
+    }
+
+    byte_limit
+}
+
+fn is_wrap_break_char(ch: char) -> bool {
+    matches!(
+        ch,
+        ' ' | '，' | '。' | '、' | '；' | '：' | '！' | '？' | ',' | '.' | ';' | ':' | '!' | '?'
+    )
 }
 
 fn build_header(
@@ -369,8 +442,41 @@ mod tests {
         assert!(long.len() > 1);
     }
 
+    #[test]
+    fn wrap_line_handles_chinese_without_panic() {
+        let text = "赶快来拍这个新链接，厂家为了快速打开市场，销量一降再降，真的是不计成本不计利润狠狠放大招了";
+        let wrapped = wrap_line(text, 18);
+        assert!(wrapped.len() > 1);
+        assert!(wrapped.iter().all(|line| !line.is_empty()));
+        for line in &wrapped {
+            assert!(line.is_char_boundary(line.len()));
+        }
+    }
+
+    #[test]
+    fn auto_font_size_scales_with_height() {
+        assert_eq!(auto_font_size(1080), 52);
+        assert_eq!(auto_font_size(1920), 72);
+        assert_eq!(auto_font_size(720), 36);
+        assert_eq!(auto_font_size(1280), 61);
+    }
+
+    #[test]
+    fn resolve_play_resolution_prefers_video_size() {
+        let style = AssStyle {
+            aspect_ratio: "16:9".to_string(),
+            resolution: "1080p".to_string(),
+            ..AssStyle::default()
+        };
+        assert_eq!(
+            resolve_play_resolution(&style, Some((1280, 720))),
+            (1280, 720)
+        );
+        assert_eq!(resolve_play_resolution(&style, None), (1920, 1080));
+    }
+
     #[tokio::test]
-    async fn build_ass_writes_utf8_bom() {
+    async fn build_ass_writes_utf8_bom_and_matches_video_size() {
         let dir = std::env::temp_dir().join(format!("repix-ass-test-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let path = dir.join("subs.ass");
@@ -382,12 +488,17 @@ mod tests {
             }],
             &path,
             &AssStyle::default(),
+            Some((1280, 720)),
         )
         .await
         .unwrap();
         let bytes = tokio::fs::read(&path).await.unwrap();
+        let content = String::from_utf8_lossy(&bytes);
         assert_eq!(&bytes[..3], &[0xEF, 0xBB, 0xBF]);
-        assert!(String::from_utf8_lossy(&bytes).contains("Dialogue:"));
+        assert!(content.contains("Dialogue:"));
+        assert!(content.contains("PlayResX: 1280"));
+        assert!(content.contains("PlayResY: 720"));
+        assert!(content.contains(",36,"));
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }

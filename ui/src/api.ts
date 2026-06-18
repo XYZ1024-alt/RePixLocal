@@ -5,8 +5,11 @@ import type {
   CreateTaskPayload,
   DashboardData,
   PipelineRun,
+  DashscopeCredentialPayload,
+  DashscopeCredentialView,
   ProviderCredentialPayload,
   ProviderCredentialView,
+  PickedImageFile,
   PickedVideoFile,
   ProviderModelOption,
   RunDetail,
@@ -58,6 +61,10 @@ export async function listAssets(taskId: string) {
   return invoke<Asset[]>("list_assets", { taskId });
 }
 
+export async function revealAsset(path: string) {
+  return invoke<void>("reveal_asset", { path });
+}
+
 export async function getLatestRun(taskId: string) {
   return invoke<PipelineRun | null>("get_latest_run", { taskId });
 }
@@ -90,6 +97,14 @@ export async function listProviderCredentials() {
   return invoke<ProviderCredentialView[]>("list_provider_credentials");
 }
 
+export async function listDashscopeCredentials() {
+  return invoke<DashscopeCredentialView>("list_dashscope_credentials");
+}
+
+export async function saveDashscopeCredential(input: DashscopeCredentialPayload) {
+  return invoke<void>("save_dashscope_credential", { input });
+}
+
 export async function listProviderModels(provider: string) {
   return invoke<ProviderModelOption[]>("list_provider_models", { provider });
 }
@@ -100,4 +115,8 @@ export async function listAllAssets(taskId?: string) {
 
 export async function pickVideoFile() {
   return invoke<PickedVideoFile | null>("pick_video_file");
+}
+
+export async function pickImageFiles() {
+  return invoke<PickedImageFile[]>("pick_image_files");
 }

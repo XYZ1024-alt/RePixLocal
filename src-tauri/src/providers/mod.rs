@@ -92,6 +92,7 @@ pub fn validate_provider_config(config: &ProviderConfig) -> AppResult<()> {
     Ok(())
 }
 
+pub mod cosyvoice;
 pub mod deepseek;
 pub mod fetch;
 pub mod http_client;

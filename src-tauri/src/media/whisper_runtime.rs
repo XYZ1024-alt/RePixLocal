@@ -76,7 +76,7 @@ pub fn format_process_failure(exit_code: Option<i32>, stdout: &str, stderr: &str
         #[cfg(windows)]
         if code == -1073741515 || code as u32 == 0xC0000135 {
             parts.push(
-                "missing whisper runtime DLLs (ggml.dll / whisper.dll); reinstall or rerun npm run fetch-tools"
+                "missing whisper runtime DLLs (ggml.dll / whisper.dll); reinstall or rerun bun run fetch-tools"
                     .to_string(),
             );
         }

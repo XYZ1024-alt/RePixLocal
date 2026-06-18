@@ -12,8 +12,10 @@ import {
 import {
   ensureWhisperModel,
   getWhisperModelStatus,
+  listDashscopeCredentials,
   listProviderCredentials,
   listProviderModels,
+  saveDashscopeCredential,
   saveProviderCredential,
   updateSettings
 } from "@/api";
@@ -39,6 +41,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTranslations } from "@/i18n/context";
 import type {
+  DashscopeCredentialView,
   ProviderCredentialView,
   ProviderModelOption,
   Settings,
@@ -46,16 +49,16 @@ import type {
   WhisperModelStatus
 } from "@/types";
 
-type Provider = "DEEPSEEK" | "QWEN_VL" | "TONGYI" | "SEEDANCE";
+type Provider = "DEEPSEEK" | "SEEDANCE";
 
-const PROVIDERS: Provider[] = ["DEEPSEEK", "QWEN_VL", "TONGYI", "SEEDANCE"];
+const PROVIDERS: Provider[] = ["DEEPSEEK", "SEEDANCE"];
 
 const PROVIDER_LABELS: Record<Provider, string> = {
   DEEPSEEK: "DeepSeek",
-  QWEN_VL: "Qwen-VL",
-  TONGYI: "Tongyi Wanxiang",
   SEEDANCE: "Seedance"
 };
+
+const DEFAULT_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/api/v1";
 
 export function SettingsView(props: {
   settings: Settings;
@@ -66,11 +69,19 @@ export function SettingsView(props: {
 }) {
   const t = useTranslations("settings");
   const [credentials, setCredentials] = useState<ProviderCredentialView[]>([]);
+  const [dashscope, setDashscope] = useState<DashscopeCredentialView | null>(null);
+
+  function refreshCredentials() {
+    return Promise.all([listProviderCredentials(), listDashscopeCredentials()])
+      .then(([providerCredentials, dashscopeCredentials]) => {
+        setCredentials(providerCredentials);
+        setDashscope(dashscopeCredentials);
+      })
+      .catch((error) => props.onMessage(String(error)));
+  }
 
   useEffect(() => {
-    listProviderCredentials()
-      .then(setCredentials)
-      .catch((error) => props.onMessage(String(error)));
+    void refreshCredentials();
   }, [props.onMessage]);
 
   return (
@@ -84,6 +95,10 @@ export function SettingsView(props: {
           </TabsList>
 
           <TabsContent value="providers" className="space-y-4">
+            <DashScopeKeyCard
+              credential={dashscope}
+              onSaved={() => refreshCredentials()}
+            />
             {PROVIDERS.map((provider) => {
               const credential = credentials.find((entry) => entry.provider === provider);
               return (
@@ -95,11 +110,7 @@ export function SettingsView(props: {
                   maskedKey={credential?.masked_key}
                   keyDecryptFailed={credential?.key_decrypt_failed}
                   config={credential?.config}
-                  onSaved={() =>
-                    listProviderCredentials()
-                      .then(setCredentials)
-                      .catch((error) => props.onMessage(String(error)))
-                  }
+                  onSaved={() => refreshCredentials()}
                 />
               );
             })}
@@ -116,6 +127,384 @@ export function SettingsView(props: {
         </Tabs>
       </div>
     </>
+  );
+}
+
+function DashScopeKeyCard(props: {
+  credential: DashscopeCredentialView | null;
+  onSaved: () => void;
+}) {
+  const t = useTranslations("settings");
+  const [showKey, setShowKey] = useState(false);
+  const [key, setKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState(DEFAULT_DASHSCOPE_BASE_URL);
+  const [qwenVlModel, setQwenVlModel] = useState("");
+  const [tongyiModel, setTongyiModel] = useState("");
+  const [cosyvoiceModel, setCosyvoiceModel] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [qwenModels, setQwenModels] = useState<ProviderModelOption[] | null>(null);
+  const [tongyiModels, setTongyiModels] = useState<ProviderModelOption[] | null>(null);
+  const [cosyvoiceModels, setCosyvoiceModels] = useState<ProviderModelOption[] | null>(null);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [keyChanged, setKeyChanged] = useState(false);
+  const hasSavedKey = Boolean(props.credential?.masked_key) && !props.credential?.key_decrypt_failed;
+  const allModelsSelected = Boolean(qwenVlModel && tongyiModel && cosyvoiceModel);
+  const isConfigured = hasSavedKey && allModelsSelected;
+
+  useEffect(() => {
+    setBaseUrl(props.credential?.base_url?.trim() || DEFAULT_DASHSCOPE_BASE_URL);
+    setQwenVlModel(props.credential?.qwen_vl_model ?? "");
+    setTongyiModel(props.credential?.tongyi_model ?? "");
+    setCosyvoiceModel(props.credential?.cosyvoice_model ?? "");
+  }, [
+    props.credential?.base_url,
+    props.credential?.qwen_vl_model,
+    props.credential?.tongyi_model,
+    props.credential?.cosyvoice_model
+  ]);
+
+  async function persistDashscope(models?: {
+    qwen_vl_model: string;
+    tongyi_model: string;
+    cosyvoice_model: string;
+  }) {
+    await saveDashscopeCredential({
+      api_key: key,
+      base_url: baseUrl,
+      qwen_vl_model: models?.qwen_vl_model ?? qwenVlModel,
+      tongyi_model: models?.tongyi_model ?? tongyiModel,
+      cosyvoice_model: models?.cosyvoice_model ?? cosyvoiceModel
+    });
+  }
+
+  async function handleFetchModels() {
+    if (!key && !hasSavedKey) {
+      setMessage({ type: "error", text: t("apiKeyRequired") });
+      return;
+    }
+
+    setLoadingModels(true);
+    setMessage(null);
+
+    try {
+      if (key) {
+        try {
+          await persistDashscope();
+          setKeyChanged(false);
+        } catch {
+          setMessage({ type: "error", text: t("failedToSaveKey") });
+          return;
+        }
+      }
+
+      const [qwenFetched, tongyiFetched, cosyFetched] = await Promise.all([
+        listProviderModels("QWEN_VL"),
+        listProviderModels("TONGYI"),
+        listProviderModels("COSYVOICE")
+      ]);
+
+      if (qwenFetched.length > 0) {
+        setQwenModels(qwenFetched);
+      }
+      if (tongyiFetched.length > 0) {
+        setTongyiModels(tongyiFetched);
+      }
+      if (cosyFetched.length > 0) {
+        setCosyvoiceModels(cosyFetched);
+      }
+
+      if (qwenFetched.length > 0 || tongyiFetched.length > 0 || cosyFetched.length > 0) {
+        setMessage({ type: "success", text: t("modelsFetched") });
+      } else {
+        setMessage({ type: "error", text: t("noModelsAvailable") });
+      }
+    } catch {
+      setMessage({ type: "error", text: t("failedToFetchModels") });
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  async function handleSave(event: React.FormEvent) {
+    event.preventDefault();
+    if (!key && !hasSavedKey) {
+      setMessage({ type: "error", text: t("apiKeyRequired") });
+      return;
+    }
+    if (!qwenVlModel || !tongyiModel || !cosyvoiceModel) {
+      setMessage({ type: "error", text: t("dashscope.allModelsRequired") });
+      return;
+    }
+    if (keyChanged && !qwenModels && !tongyiModels && !cosyvoiceModels) {
+      setMessage({ type: "error", text: t("fetchModelsFirst") });
+      return;
+    }
+
+    setSaving(true);
+    setMessage(null);
+    try {
+      await persistDashscope();
+      setMessage({ type: "success", text: t("savedSuccessfully") });
+      setKey("");
+      setKeyChanged(false);
+      props.onSaved();
+      window.setTimeout(() => setMessage(null), 3000);
+    } catch {
+      setMessage({ type: "error", text: t("failedToSave") });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex size-10 items-center justify-center rounded-lg bg-blue-500/10 ring-1 ring-blue-400/20">
+              <Key className="size-5 text-blue-400" />
+            </div>
+            <div>
+              <CardTitle>{t("dashscope.title")}</CardTitle>
+              <CardDescription>{t("dashscope.description")}</CardDescription>
+            </div>
+          </div>
+          <Badge
+            variant={
+              props.credential?.key_decrypt_failed
+                ? "destructive"
+                : isConfigured
+                  ? "default"
+                  : "secondary"
+            }
+          >
+            {props.credential?.key_decrypt_failed ? (
+              <>
+                <AlertCircle className="mr-1 size-3" /> {t("keyDecryptFailedBadge")}
+              </>
+            ) : isConfigured ? (
+              <>
+                <CheckCircle2 className="mr-1 size-3" /> {t("configured")}
+              </>
+            ) : (
+              <>
+                <AlertCircle className="mr-1 size-3" /> {t("notConfigured")}
+              </>
+            )}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSave} className="space-y-4">
+          <div>
+            <Label htmlFor="dashscope-key">{t("apiKey")}</Label>
+            <div className="relative mt-1.5">
+              <Input
+                id="dashscope-key"
+                type={showKey ? "text" : "password"}
+                placeholder={
+                  props.credential?.key_decrypt_failed
+                    ? "sk-..."
+                    : props.credential?.masked_key || "sk-..."
+                }
+                value={key}
+                onChange={(event) => {
+                  setKey(event.target.value);
+                  setKeyChanged(true);
+                  if (event.target.value) {
+                    setQwenModels(null);
+                    setTongyiModels(null);
+                    setCosyvoiceModels(null);
+                  }
+                }}
+                className="pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((value) => !value)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+            {props.credential?.key_decrypt_failed && !key ? (
+              <p className="mt-1 text-xs text-red-500">{t("keyDecryptFailed")}</p>
+            ) : null}
+            {props.credential?.masked_key && !key && !props.credential?.key_decrypt_failed ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t("currentlySaved", { maskedKey: props.credential.masked_key })}
+              </p>
+            ) : null}
+            {props.credential?.keys_mismatch ? (
+              <p className="mt-1 text-xs text-amber-500">{t("dashscope.keysMismatch")}</p>
+            ) : null}
+            {keyChanged && key ? (
+              <p className="mt-1 text-xs text-amber-500">{t("keyChangedWarning")}</p>
+            ) : null}
+          </div>
+
+          <div className="flex items-center justify-between">
+            <Label className="text-sm font-medium">{t("dashscope.modelsHeading")}</Label>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleFetchModels}
+              disabled={loadingModels}
+              className="h-auto p-1 text-xs"
+            >
+              {loadingModels ? t("fetchingModels") : t("fetchModels")}
+            </Button>
+          </div>
+
+          <DashscopeModelField
+            id="dashscope-qwen-vl-model"
+            label={t("dashscope.qwenVlModel")}
+            value={qwenVlModel}
+            models={qwenModels}
+            onChange={setQwenVlModel}
+            placeholder={t("fetchModelsToSelect")}
+            requiredLabel={t("required")}
+            useCustomModelLabel={t("useCustomModel")}
+            useProviderModelsLabel={t("useProviderModels")}
+            selectPlaceholder={t("selectModel")}
+          />
+          <DashscopeModelField
+            id="dashscope-tongyi-model"
+            label={t("dashscope.tongyiModel")}
+            value={tongyiModel}
+            models={tongyiModels}
+            onChange={setTongyiModel}
+            placeholder={t("fetchModelsToSelect")}
+            requiredLabel={t("required")}
+            useCustomModelLabel={t("useCustomModel")}
+            useProviderModelsLabel={t("useProviderModels")}
+            selectPlaceholder={t("selectModel")}
+          />
+          <DashscopeModelField
+            id="dashscope-cosyvoice-model"
+            label={t("dashscope.cosyvoiceModel")}
+            value={cosyvoiceModel}
+            models={cosyvoiceModels}
+            onChange={setCosyvoiceModel}
+            placeholder={t("fetchModelsToSelect")}
+            requiredLabel={t("required")}
+            useCustomModelLabel={t("useCustomModel")}
+            useProviderModelsLabel={t("useProviderModels")}
+            selectPlaceholder={t("selectModel")}
+          />
+
+          <Accordion type="single" collapsible>
+            <AccordionItem value="advanced" className="border-none">
+              <AccordionTrigger className="text-sm">{t("advancedOptions")}</AccordionTrigger>
+              <AccordionContent className="space-y-4 pt-2">
+                <div>
+                  <Label htmlFor="dashscope-baseUrl">{t("baseUrl")}</Label>
+                  <Input
+                    id="dashscope-baseUrl"
+                    type="url"
+                    placeholder={DEFAULT_DASHSCOPE_BASE_URL}
+                    value={baseUrl}
+                    onChange={(event) => setBaseUrl(event.target.value)}
+                    className="mt-1.5"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">{t("dashscope.baseUrlHint")}</p>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
+
+          <div className="flex items-center gap-3">
+            <Button type="submit" disabled={saving || !allModelsSelected}>
+              <Save className="mr-2 size-4" />
+              {saving ? t("saving") : t("save")}
+            </Button>
+            {message ? (
+              <span
+                className={
+                  message.type === "success" ? "text-sm text-green-500" : "text-sm text-red-500"
+                }
+              >
+                {message.text}
+              </span>
+            ) : null}
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DashscopeModelField(props: {
+  id: string;
+  label: string;
+  value: string;
+  models: ProviderModelOption[] | null;
+  onChange: (value: string) => void;
+  placeholder: string;
+  requiredLabel: string;
+  useCustomModelLabel: string;
+  useProviderModelsLabel: string;
+  selectPlaceholder: string;
+}) {
+  const [useCustomModel, setUseCustomModel] = useState(false);
+
+  useEffect(() => {
+    if (!props.models?.length) {
+      setUseCustomModel(true);
+    }
+  }, [props.models]);
+
+  return (
+    <div>
+      <Label htmlFor={props.id} className="flex items-center gap-2">
+        {props.label}
+        {!props.value ? <span className="text-xs text-red-500">*{props.requiredLabel}</span> : null}
+      </Label>
+      {props.models && !useCustomModel ? (
+        <>
+          <Select value={props.value} onValueChange={props.onChange}>
+            <SelectTrigger id={props.id} className="mt-1.5">
+              <SelectValue placeholder={props.selectPlaceholder} />
+            </SelectTrigger>
+            <SelectContent>
+              {props.models.map((entry) => (
+                <SelectItem key={entry.id} value={entry.id}>
+                  {entry.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <button
+            type="button"
+            onClick={() => setUseCustomModel(true)}
+            className="mt-1 text-xs text-muted-foreground hover:underline"
+          >
+            {props.useCustomModelLabel}
+          </button>
+        </>
+      ) : (
+        <>
+          <Input
+            id={props.id}
+            placeholder={props.placeholder}
+            value={props.value}
+            onChange={(event) => props.onChange(event.target.value)}
+            className="mt-1.5"
+          />
+          {props.models ? (
+            <button
+              type="button"
+              onClick={() => setUseCustomModel(false)}
+              className="mt-1 text-xs text-muted-foreground hover:underline"
+            >
+              {props.useProviderModelsLabel}
+            </button>
+          ) : null}
+        </>
+      )}
+    </div>
   );
 }
 

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { CheckCircle2, Circle, Loader2, XCircle } from "lucide-react";
-import { getRun, getRunCosts, listAssets } from "@/api";
+import { getRun, getRunCosts, listAssets, revealAsset } from "@/api";
 import { AssetSections } from "@/components/AssetSections";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useLocale, useTranslations } from "@/i18n/context";
 import { toLibraryAssets } from "@/lib/library";
@@ -78,6 +79,7 @@ export function ConsoleLive(props: ConsoleLiveProps) {
         <LogPanel connected={live.connected} logs={live.logs} status={live.status} />
       </div>
       <CostPanel summary={live.costSummary} error={live.costError} />
+      <FinalOutputPanel status={live.status} assets={live.assets} />
       <TaskAssets
         title={props.assetTitle}
         assets={live.assets}
@@ -170,6 +172,25 @@ function useConsoleLiveData({
       setConnected(false);
     };
   }, [locale, runId, taskId, taskTitle]);
+
+  useEffect(() => {
+    if (!ASSET_REFRESH_RUN_STATUSES.has(status)) return;
+
+    let active = true;
+    void listAssets(taskId)
+      .then((rows) => {
+        if (!active) return;
+        setAssets(toLibraryAssets(rows, { [taskId]: taskTitle }));
+        setAssetError(null);
+      })
+      .catch((err) => {
+        if (!active) return;
+        setAssetError(formatError(err));
+      });
+    return () => {
+      active = false;
+    };
+  }, [status, taskId, taskTitle]);
 
   useEffect(() => {
     if (!ACTIVE_RUN_STATUSES.has(status)) return;
@@ -391,6 +412,47 @@ function ProviderCostRow({ row }: { row: CostSummary["providers"][number] }) {
         <p className="mt-1 text-xs text-red-300">{t("failedCostCalls", { count: row.failed_calls })}</p>
       ) : null}
     </div>
+  );
+}
+
+function FinalOutputPanel({
+  status,
+  assets
+}: {
+  status: RunStatus;
+  assets: LibraryAsset[];
+}) {
+  const t = useTranslations("console");
+  const finalAsset = assets.find((asset) => asset.type === "FINAL_VIDEO");
+
+  if (status !== "COMPLETED" || !finalAsset) return null;
+
+  return (
+    <Card className="overflow-hidden border-emerald-400/20 bg-emerald-500/[0.04]">
+      <CardHeader className="flex-row items-center justify-between gap-3">
+        <CardTitle>{t("finalOutputTitle")}</CardTitle>
+        <Button
+          onClick={() => void revealAsset(finalAsset.storageKey)}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          {t("openInFolder")}
+        </Button>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <p className="text-sm text-muted-foreground">{t("finalOutputHint")}</p>
+        {finalAsset.url ? (
+          <video
+            src={finalAsset.url}
+            controls
+            className="aspect-video w-full rounded-md bg-black object-contain"
+          />
+        ) : (
+          <p className="text-sm text-amber-300">{finalAsset.storageKey}</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

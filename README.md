@@ -26,7 +26,7 @@ RePix Local 是 [RePix](https://github.com) 的本地桌面版：用 **Tauri 2 +
 
 ## 环境要求
 
-- **Node.js** 18+ 与 npm
+- **[Bun](https://bun.sh)** 1.1+
 - **Rust** stable（含 `cargo`）
 - **Tauri 依赖**（Windows 需 WebView2；首次开发建议安装 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)）
 - **FFmpeg / FFprobe / whisper-cli**：Windows 安装包已内置；也可在设置页覆盖为自定义路径
@@ -39,25 +39,25 @@ RePix Local 是 [RePix](https://github.com) 的本地桌面版：用 **Tauri 2 +
 cd re-pix-local
 
 # 安装前端依赖
-npm install
+bun install
 
 # 开发模式（启动 Vite + Tauri 桌面窗口）
-npm run dev
+bun run dev
 ```
 
 ### 常用命令
 
 ```powershell
-npm run ui:dev      # 仅前端（http://127.0.0.1:1420，无 Tauri 能力）
-npm run ui:check    # TypeScript 类型检查
-npm run ui:build    # 构建前端到 dist/
-npm run rust:check  # Rust 编译检查
-npm run rust:test   # Rust 单元测试
-npm run test        # ui:check + rust:test
-npm run check       # ui:check + rust:check + rust:test（提交前推荐）
-npm run fetch-tools # 下载并准备内置 FFmpeg / whisper-cli（打包前自动执行）
-npm run build       # 打包 Windows NSIS 安装包
-npm run build:win   # 同上，显式指定 x86_64-pc-windows-msvc
+bun run ui:dev      # 仅前端（http://127.0.0.1:1420，无 Tauri 能力）
+bun run ui:check    # TypeScript 类型检查
+bun run ui:build    # 构建前端到 dist/
+bun run rust:check  # Rust 编译检查
+bun run rust:test   # Rust 单元测试
+bun run test        # ui:check + rust:test
+bun run check       # ui:check + rust:check + rust:test（提交前推荐）
+bun run fetch-tools # 下载并准备内置 FFmpeg / whisper-cli（打包前自动执行）
+bun run build       # 打包 Windows NSIS 安装包
+bun run build:win   # 同上，显式指定 x86_64-pc-windows-msvc
 ```
 
 安装包输出目录：`src-tauri/target/release/bundle/nsis/`（`.exe` 安装程序）。
@@ -129,16 +129,15 @@ RePixLocal/
 
 ### Provider API Keys
 
-在 **设置 → Provider API Keys** 中分别配置：
+在 **设置 → API 密钥** 中配置：
 
-| Provider | 用途 |
-|----------|------|
-| `DEEPSEEK` | 字幕校正、脚本改写 |
-| `QWEN_VL` | 源视频关键帧视觉分析 |
-| `TONGYI` | 分镜图 img2img 生成 |
-| `SEEDANCE` | 视频片段生成 |
+| 卡片 | 用途 |
+|------|------|
+| **DeepSeek** | 字幕校正、脚本改写 |
+| **DashScope（百炼）** | 一个 API Key + 三个模型：Qwen-VL 视觉分析、通义万相分镜、CosyVoice TTS |
+| **Seedance** | 视频片段生成（火山引擎 Ark，独立密钥） |
 
-每个 Provider 支持保存掩码后的 Key、可选 Base URL、以及模型选择。API Key 通过系统 keyring 加密，不以明文写入数据库。
+DashScope 三项在底层仍分别记录模型名，但共用同一份加密 Key。DeepSeek / Seedance 各自单独配置 Key、可选 Base URL 与模型。API Key 通过系统 keyring 加密，不以明文写入数据库。
 
 ### 对象存储（Stage 3/4 必需）
 
@@ -175,8 +174,8 @@ Tongyi 与 Seedance 需要公网 HTTPS 图片 URL。在 **设置 → 系统设�
 - 前端路径别名：`@/` → `ui/src/`
 - 所有数据访问经 `ui/src/api.ts` 的 `invoke()` 调用，不引入额外 HTTP 层
 - 数据库迁移位于 `src-tauri/src/db/migrations/`，应用启动时自动执行
-- 提交前运行：`npm run check`
-- CI：push 至 `main` 时自动执行 `npm run check`（GitHub Actions，Windows）
+- 提交前运行：`bun run check`
+- CI：push 至 `main` 时自动执行 `bun run check`（GitHub Actions，Windows）
 
 ## 许可证
 

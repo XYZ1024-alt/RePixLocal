@@ -31,12 +31,21 @@ pub enum StageStatus {
     Canceled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowTaskType {
+    Replicate,
+    ImageToVideo,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StageType {
     TranscriptExtraction,
     ScriptRewrite,
+    ScriptPlanning,
     StoryboardGeneration,
+    TtsSynthesis,
     SegmentGeneration,
     FinalRender,
 }
@@ -45,7 +54,9 @@ pub enum StageType {
 #[serde(rename_all = "snake_case")]
 pub enum AssetType {
     SourceVideo,
+    SourceImage,
     Audio,
+    TtsSegment,
     Keyframe,
     GeneratedFrame,
     VideoSegment,
@@ -67,6 +78,7 @@ pub struct Task {
     pub id: String,
     pub title: String,
     pub source_path: String,
+    pub task_type: WorkflowTaskType,
     pub status: TaskStatus,
     pub config_json: Value,
     pub created_at: DateTime<Utc>,
@@ -161,6 +173,28 @@ pub struct ProviderCredentialInput {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashscopeCredentialInput {
+    pub api_key: String,
+    pub base_url: String,
+    pub qwen_vl_model: String,
+    pub tongyi_model: String,
+    pub cosyvoice_model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashscopeCredentialView {
+    pub masked_key: String,
+    #[serde(default)]
+    pub key_decrypt_failed: bool,
+    #[serde(default)]
+    pub keys_mismatch: bool,
+    pub base_url: Option<String>,
+    pub qwen_vl_model: Option<String>,
+    pub tongyi_model: Option<String>,
+    pub cosyvoice_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -335,6 +369,13 @@ pub struct SubmitTaskResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PickedVideoFile {
+    pub path: String,
+    pub name: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PickedImageFile {
     pub path: String,
     pub name: String,
     pub size_bytes: u64,

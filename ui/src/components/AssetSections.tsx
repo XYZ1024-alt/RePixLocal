@@ -183,10 +183,18 @@ function EmptyAssets({ text }: { text: string }) {
 }
 
 function getSections(assets: LibraryAsset[], t: Translate) {
+  const finals = assets.filter(isFinalVideo);
+  const segments = assets.filter(isSegmentVideo);
+  const sources = assets.filter(isSourceVideo);
   return [
+    { key: "final", title: t("sections.final"), assets: finals },
+    {
+      key: "videos",
+      title: t("sections.videos"),
+      assets: [...segments, ...sources]
+    },
     { key: "images", title: t("sections.images"), assets: assets.filter(isImage) },
     { key: "audio", title: t("sections.audio"), assets: assets.filter(isAudio) },
-    { key: "videos", title: t("sections.videos"), assets: assets.filter(isVideo) },
     { key: "documents", title: t("sections.documents"), assets: assets.filter(isDocument) }
   ].filter((section) => section.assets.length > 0);
 }
@@ -207,13 +215,20 @@ function isImage(asset: LibraryAsset) {
   return asset.type === "STORYBOARD_FRAME" || Boolean(asset.mimeType?.startsWith("image/"));
 }
 
+function isFinalVideo(asset: LibraryAsset) {
+  return asset.type === "FINAL_VIDEO";
+}
+
+function isSegmentVideo(asset: LibraryAsset) {
+  return asset.type === "VIDEO_SEGMENT";
+}
+
+function isSourceVideo(asset: LibraryAsset) {
+  return asset.type === "SOURCE_VIDEO";
+}
+
 function isVideo(asset: LibraryAsset) {
-  return (
-    asset.type === "VIDEO_SEGMENT" ||
-    asset.type === "FINAL_VIDEO" ||
-    asset.type === "SOURCE_VIDEO" ||
-    Boolean(asset.mimeType?.startsWith("video/"))
-  );
+  return isFinalVideo(asset) || isSegmentVideo(asset) || isSourceVideo(asset);
 }
 
 function isAudio(asset: LibraryAsset) {

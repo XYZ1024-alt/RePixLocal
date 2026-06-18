@@ -36,6 +36,26 @@ Source scenes:
 Output JSON array only:
 [{"index": 0, "scriptText": "...", "visualPrompt": "...", "motionPrompt": "..."}, ...]"#;
 
+const SYSTEM_PROMPT_IMAGE_PLANNING: &str = r#"You are a video director. The user provides reference images and a creative brief.
+
+For each of the {n} scenes (one per image), you have a visual description from image analysis.
+
+Your task: write narration and motion for a short video using these images.
+
+For EACH scene output:
+1. **scriptText**: narration matching the brief and image content, in tone '{tone}'. Use the same language as the brief.
+2. **motionPrompt**: camera and subject movement in English.
+
+Rules:
+- Do not invent scenes beyond the image count.
+- Keep each scriptText concise enough for a short video segment (1-3 sentences).
+
+Image scenes:
+{visual_context}
+
+Output JSON array only:
+[{"index": 0, "scriptText": "...", "motionPrompt": "..."}, ...]"#;
+
 const SUBTITLE_CORRECTION_PROMPT: &str = r#"You are a subtitle proofreader. Correct ASR subtitle text while preserving the speaker's original meaning.
 Rules:
 - Return ONLY a JSON array.
@@ -134,6 +154,40 @@ impl DeepSeekClient {
             }
         }
         Ok(scenes)
+    }
+
+    pub async fn plan_script_from_images(
+        &self,
+        requirements: &str,
+        visual_descriptions: &[String],
+        tone: &str,
+        target_scenes: i32,
+    ) -> AppResult<Vec<RewrittenScene>> {
+        let settings = self.repo.get_provider_settings("DEEPSEEK").await?;
+        let visual_context = visual_descriptions
+            .iter()
+            .enumerate()
+            .map(|(index, description)| format!("Scene {index}: {description}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let payload = json!({
+            "model": settings.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT_IMAGE_PLANNING
+                        .replace("{n}", &target_scenes.to_string())
+                        .replace("{tone}", tone)
+                        .replace("{visual_context}", &visual_context),
+                },
+                {
+                    "role": "user",
+                    "content": requirements,
+                }
+            ],
+        });
+        let content = self.chat_completion(&settings, payload).await?;
+        parse_scenes(&content, target_scenes)
     }
 
     async fn chat_completion(

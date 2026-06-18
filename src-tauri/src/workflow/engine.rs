@@ -8,7 +8,7 @@ use crate::db::Repository;
 use crate::errors::AppResult;
 use crate::media::ffmpeg::FfmpegRunner;
 use crate::media::whisper::WhisperRunner;
-use crate::models::{PipelineRun, TaskStatus};
+use crate::models::{PipelineRun, TaskStatus, WorkflowTaskType};
 use crate::storage::local_assets::AssetManager;
 use crate::workflow::events::{emit_pipeline_event, PipelineEvent};
 use crate::workflow::runner::PipelineRunner;
@@ -47,11 +47,27 @@ impl WorkflowEngine {
         self.repo
             .insert_log(Some(task_id), None, "info", "workflow started")
             .await?;
-        let source_asset = self
-            .assets
-            .import_source_video(task_id, &task.source_path)
-            .await?;
-        self.repo.insert_asset(&source_asset).await?;
+
+        match task.task_type {
+            WorkflowTaskType::Replicate => {
+                let source_asset = self
+                    .assets
+                    .import_source_video(task_id, &task.source_path)
+                    .await?;
+                self.repo.insert_asset(&source_asset).await?;
+            }
+            WorkflowTaskType::ImageToVideo => {
+                let image_paths = image_paths_from_config(&task.config_json)?;
+                let source_assets = self
+                    .assets
+                    .import_source_images(task_id, &image_paths)
+                    .await?;
+                for asset in source_assets {
+                    self.repo.insert_asset(&asset).await?;
+                }
+            }
+        }
+
         let run = self.repo.create_run(task_id).await?;
         emit_pipeline_event(
             app,
@@ -116,4 +132,25 @@ impl WorkflowEngine {
             .await?
             .ok_or_else(|| crate::errors::AppError::Workflow(format!("task not found: {task_id}")))
     }
+}
+
+fn image_paths_from_config(config: &serde_json::Value) -> AppResult<Vec<String>> {
+    let paths = config
+        .get("imagePaths")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| {
+            crate::errors::AppError::Workflow(
+                "image_to_video task requires imagePaths in config".into(),
+            )
+        })?;
+    let image_paths: Vec<String> = paths
+        .iter()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect();
+    if image_paths.is_empty() {
+        return Err(crate::errors::AppError::Workflow(
+            "image_to_video task requires at least one image".into(),
+        ));
+    }
+    Ok(image_paths)
 }

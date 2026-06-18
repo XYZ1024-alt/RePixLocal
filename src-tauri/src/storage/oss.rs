@@ -89,7 +89,12 @@ impl OssClient {
     }
 
     pub async fn put_file(&self, key: &str, path: &Path, content_type: &str) -> AppResult<String> {
-        let bytes = tokio::fs::read(path).await?;
+        let bytes = tokio::fs::read(path).await.map_err(|error| {
+            AppError::Workflow(format!(
+                "failed to read file for upload ({}): {error}",
+                path.display()
+            ))
+        })?;
         self.bucket
             .put_object_with_content_type(key, &bytes, content_type)
             .await

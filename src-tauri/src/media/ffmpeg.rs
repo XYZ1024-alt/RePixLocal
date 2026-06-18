@@ -69,6 +69,127 @@ impl FfmpegRunner {
         Err(AppError::Workflow("ffmpeg audio extraction failed".into()))
     }
 
+    pub async fn concat_audio(&self, audio_paths: &[PathBuf], out_path: &Path) -> AppResult<()> {
+        if audio_paths.is_empty() {
+            return Err(AppError::Workflow("no audio segments to concatenate".into()));
+        }
+        if audio_paths.len() == 1 {
+            return self.convert_to_wav(&audio_paths[0], out_path).await;
+        }
+        let ffmpeg = self.ffmpeg_path().await?;
+        let list_path = out_path.with_extension("audio-concat.txt");
+        let mut list_body = String::new();
+        for audio in audio_paths {
+            let normalized = audio.to_string_lossy().replace('\\', "/");
+            list_body.push_str(&format!("file '{normalized}'\n"));
+        }
+        let mut file = tokio::fs::File::create(&list_path).await?;
+        file.write_all(list_body.as_bytes()).await?;
+        file.flush().await?;
+
+        let status = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                &path_arg(&list_path),
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                &path_arg(out_path),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status()
+            .await
+            .map_err(AppError::from)?;
+        let _ = tokio::fs::remove_file(&list_path).await;
+        if status.success() {
+            return Ok(());
+        }
+        Err(AppError::Workflow("ffmpeg audio concat failed".into()))
+    }
+
+    pub async fn convert_to_wav(&self, input: &Path, out_wav: &Path) -> AppResult<()> {
+        if let Some(parent) = out_wav.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let ffmpeg = self.ffmpeg_path().await?;
+        let status = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-i",
+                &path_arg(input),
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                &path_arg(out_wav),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status()
+            .await
+            .map_err(AppError::from)?;
+        if status.success() {
+            return Ok(());
+        }
+        Err(AppError::Workflow("ffmpeg audio conversion failed".into()))
+    }
+
+    pub async fn create_still_segment(
+        &self,
+        image_path: &Path,
+        out_path: &Path,
+        duration_sec: f64,
+    ) -> AppResult<()> {
+        if let Some(parent) = out_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let ffmpeg = self.ffmpeg_path().await?;
+        let duration = format!("{duration_sec:.3}");
+        let filter = format!(
+            "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2"
+        );
+        let status = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-loop",
+                "1",
+                "-i",
+                &path_arg(image_path),
+                "-t",
+                &duration,
+                "-vf",
+                &filter,
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                &path_arg(out_path),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status()
+            .await
+            .map_err(AppError::from)?;
+        if status.success() {
+            return Ok(());
+        }
+        Err(AppError::Workflow("ffmpeg still segment failed".into()))
+    }
+
     pub async fn concat_segments(&self, segment_paths: &[PathBuf], out_path: &Path) -> AppResult<()> {
         if segment_paths.is_empty() {
             return Err(AppError::Workflow("no segments to concatenate".into()));
@@ -142,6 +263,54 @@ impl FfmpegRunner {
             .and_then(|value| value.as_str())
             .and_then(|value| value.parse::<f64>().ok())
             .ok_or_else(|| AppError::Workflow("ffprobe returned no duration".into()))
+    }
+
+    pub async fn probe_video_size(&self, path: &Path) -> AppResult<(i32, i32)> {
+        let ffprobe = self.ffprobe_path().await?;
+        let output = Command::new(&ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "json",
+                &path_arg(path),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(AppError::from)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AppError::Workflow(format!(
+                "ffprobe size probe failed: {}",
+                stderr.trim()
+            )));
+        }
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let stream = parsed
+            .get("streams")
+            .and_then(|value| value.as_array())
+            .and_then(|streams| streams.first())
+            .ok_or_else(|| AppError::Workflow("ffprobe returned no video stream".into()))?;
+        let width = stream
+            .get("width")
+            .and_then(|value| value.as_i64())
+            .filter(|value| *value > 0)
+            .ok_or_else(|| AppError::Workflow("ffprobe returned no video width".into()))?
+            as i32;
+        let height = stream
+            .get("height")
+            .and_then(|value| value.as_i64())
+            .filter(|value| *value > 0)
+            .ok_or_else(|| AppError::Workflow("ffprobe returned no video height".into()))?
+            as i32;
+        Ok((width, height))
     }
 
     pub async fn extract_frames(

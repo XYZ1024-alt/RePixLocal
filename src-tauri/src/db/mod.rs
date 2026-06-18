@@ -8,15 +8,15 @@ use uuid::Uuid;
 use crate::errors::AppResult;
 use crate::models::{
     AppLog, Asset, AssetStatus, AssetType, CostSummary, CreateTaskInput, DashboardData,
-    DashboardStats, ProviderCostSummary, ProviderCredentialConfig, ProviderCredentialInput,
-    ProviderCredentialView, ProviderListingCredentials, ProviderSettings, QueueItem, RunDetail,
+    DashboardStats, DashscopeCredentialInput, DashscopeCredentialView, ProviderCostSummary,
+    ProviderCredentialConfig, ProviderCredentialInput, ProviderCredentialView,
+    ProviderListingCredentials, ProviderSettings, QueueItem, RunDetail,
     RunDetailLog, RunDetailStage,
     RunListItem,
     Scene, TrendPoint, UsageItem, DashboardSummary, PipelineRun, PipelineStage, RunStatus,
-    StageStatus, StageType, Task, TaskStatus,
+    StageStatus, StageType, Task, TaskStatus, WorkflowTaskType,
 };
 use crate::secrets::{decrypt_secret, encrypt_secret, mask_secret};
-use crate::workflow::stages::ordered_stages;
 use crate::workspace::Workspace;
 
 #[derive(Debug, Clone)]
@@ -38,10 +38,12 @@ impl Repository {
 
     pub async fn create_task(&self, input: CreateTaskInput) -> AppResult<Task> {
         let now = Utc::now();
+        let task_type = workflow_task_type_from_config(&input.config_json);
         let task = Task {
             id: Uuid::new_v4().to_string(),
             title: input.title,
             source_path: input.source_path,
+            task_type,
             status: TaskStatus::Draft,
             config_json: input.config_json,
             created_at: now,
@@ -281,8 +283,114 @@ impl Repository {
         })
     }
 
+    pub async fn list_dashscope_credentials(&self) -> AppResult<DashscopeCredentialView> {
+        const PROVIDERS: [&str; 3] = ["QWEN_VL", "TONGYI", "COSYVOICE"];
+        let mut rows = Vec::new();
+        for provider in PROVIDERS {
+            let row = sqlx::query(
+                "SELECT encrypted_key, base_url, model FROM provider_credentials \
+                 WHERE UPPER(provider) = ? ORDER BY updated_at DESC LIMIT 1",
+            )
+            .bind(provider)
+            .fetch_optional(&self.pool)
+            .await?;
+            rows.push((provider, row));
+        }
+
+        let mut decrypted_keys: Vec<Option<String>> = Vec::new();
+        let mut key_decrypt_failed = false;
+        for (_, row) in &rows {
+            let Some(row) = row else {
+                decrypted_keys.push(None);
+                continue;
+            };
+            let encrypted_key: String = row.try_get("encrypted_key")?;
+            match decrypt_secret(&encrypted_key) {
+                Ok(decrypted) => decrypted_keys.push(Some(decrypted)),
+                Err(_) => {
+                    key_decrypt_failed = true;
+                    decrypted_keys.push(None);
+                }
+            }
+        }
+
+        let primary_masked = rows
+            .iter()
+            .zip(decrypted_keys.iter())
+            .find_map(|((_, row), decrypted)| {
+                row.as_ref().and_then(|_| {
+                    decrypted.as_ref().map(|value| mask_secret(value))
+                })
+            })
+            .unwrap_or_default();
+
+        let keys_mismatch = decrypted_keys
+            .iter()
+            .filter_map(|value| value.as_ref())
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| pair[0] != pair[1]);
+
+        let base_url = rows.iter().find_map(|(_, row)| {
+            row.as_ref().and_then(|row| {
+                row.try_get::<Option<String>, _>("base_url")
+                    .ok()
+                    .flatten()
+                    .filter(|value| !value.trim().is_empty())
+            })
+        });
+
+        let model_for = |index: usize| -> Option<String> {
+            rows.get(index).and_then(|(_, row)| {
+                row.as_ref().and_then(|row| {
+                    row.try_get::<Option<String>, _>("model")
+                        .ok()
+                        .flatten()
+                        .filter(|value| !value.trim().is_empty())
+                })
+            })
+        };
+
+        Ok(DashscopeCredentialView {
+            masked_key: primary_masked,
+            key_decrypt_failed,
+            keys_mismatch,
+            base_url,
+            qwen_vl_model: model_for(0),
+            tongyi_model: model_for(1),
+            cosyvoice_model: model_for(2),
+        })
+    }
+
+    pub async fn save_dashscope_credential(
+        &self,
+        input: DashscopeCredentialInput,
+    ) -> AppResult<()> {
+        let base_url = if input.base_url.trim().is_empty() {
+            default_provider_base_url("QWEN_VL").to_string()
+        } else {
+            input.base_url.trim().to_string()
+        };
+        let entries = [
+            ("QWEN_VL", input.qwen_vl_model.as_str()),
+            ("TONGYI", input.tongyi_model.as_str()),
+            ("COSYVOICE", input.cosyvoice_model.as_str()),
+        ];
+        for (provider, model) in entries {
+            self.save_provider_credential(ProviderCredentialInput {
+                provider: provider.to_string(),
+                label: "default".to_string(),
+                api_key: input.api_key.clone(),
+                base_url: base_url.clone(),
+                model: model.to_string(),
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
     pub async fn list_provider_credentials(&self) -> AppResult<Vec<ProviderCredentialView>> {
-        const PROVIDERS: [&str; 4] = ["DEEPSEEK", "QWEN_VL", "TONGYI", "SEEDANCE"];
+        const PROVIDERS: [&str; 2] = ["DEEPSEEK", "SEEDANCE"];
         let mut views = Vec::new();
         for provider in PROVIDERS {
             let row = sqlx::query(
@@ -342,6 +450,16 @@ impl Repository {
         self.get_task_cost_summary(&task_id).await
     }
 
+    pub async fn run_task_id(&self, run_id: &str) -> AppResult<String> {
+        let task_id: Option<String> = sqlx::query_scalar("SELECT task_id FROM runs WHERE id = ?")
+            .bind(run_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        task_id.ok_or_else(|| {
+            crate::errors::AppError::Workflow(format!("run not found: {run_id}"))
+        })
+    }
+
     pub async fn latest_run(&self, task_id: &str) -> AppResult<Option<PipelineRun>> {
         let row =
             sqlx::query("SELECT * FROM runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1")
@@ -351,11 +469,12 @@ impl Repository {
         row.map(row_to_run).transpose()
     }
 
-    pub async fn start_stage(&self, run_id: &str, stage: StageType) -> AppResult<()> {
-        let order_index = ordered_stages()
-            .iter()
-            .position(|value| value == &stage)
-            .unwrap_or(0) as i32;
+    pub async fn start_stage(
+        &self,
+        run_id: &str,
+        stage: StageType,
+        order_index: i32,
+    ) -> AppResult<()> {
         sqlx::query(
             "INSERT INTO stages (id, run_id, stage_type, status, error, order_index, started_at, finished_at) \
              VALUES (?, ?, ?, ?, NULL, ?, ?, NULL)",
@@ -428,6 +547,19 @@ impl Repository {
         .bind(scene.created_at.to_rfc3339())
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    pub async fn update_scene_metadata(
+        &self,
+        scene_id: &str,
+        metadata_json: &serde_json::Value,
+    ) -> AppResult<()> {
+        sqlx::query("UPDATE scenes SET metadata_json = ? WHERE id = ?")
+            .bind(metadata_json.to_string())
+            .bind(scene_id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -509,6 +641,17 @@ impl Repository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn has_task_asset(&self, task_id: &str, asset_type: AssetType) -> AppResult<bool> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM assets WHERE task_id = ? AND asset_type = ?",
+        )
+        .bind(task_id)
+        .bind(asset_type_text(&asset_type))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count > 0)
     }
 
     pub async fn list_assets(&self, task_id: &str) -> AppResult<Vec<Asset>> {
@@ -856,6 +999,14 @@ async fn run_pending_migrations(pool: &SqlitePool) -> AppResult<()> {
             .execute(pool)
             .await?;
     }
+
+    ensure_column(
+        pool,
+        "tasks",
+        "task_type",
+        "ALTER TABLE tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT 'replicate'",
+    )
+    .await?;
     Ok(())
 }
 
@@ -880,27 +1031,39 @@ async fn ensure_column(
 }
 
 async fn insert_task(pool: &SqlitePool, task: &Task) -> AppResult<()> {
-    sqlx::query("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .bind(&task.id)
-        .bind(&task.title)
-        .bind(&task.source_path)
-        .bind(status_text(&task.status))
-        .bind(task.config_json.to_string())
-        .bind(task.created_at.to_rfc3339())
-        .bind(task.updated_at.to_rfc3339())
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO tasks (id, title, source_path, status, config_json, created_at, updated_at, task_type) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&task.id)
+    .bind(&task.title)
+    .bind(&task.source_path)
+    .bind(status_text(&task.status))
+    .bind(task.config_json.to_string())
+    .bind(task.created_at.to_rfc3339())
+    .bind(task.updated_at.to_rfc3339())
+    .bind(task_type_text(&task.task_type))
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
 fn row_to_task(row: sqlx::sqlite::SqliteRow) -> AppResult<Task> {
     let config: String = row.try_get("config_json")?;
+    let config_json: Value = serde_json::from_str(&config)?;
+    let task_type = row
+        .try_get::<Option<String>, _>("task_type")
+        .ok()
+        .flatten()
+        .map(|value| parse_task_type(&value))
+        .unwrap_or_else(|| workflow_task_type_from_config(&config_json));
     Ok(Task {
         id: row.try_get("id")?,
         title: row.try_get("title")?,
         source_path: row.try_get("source_path")?,
+        task_type,
         status: parse_task_status(row.try_get::<String, _>("status")?),
-        config_json: serde_json::from_str::<Value>(&config)?,
+        config_json,
         created_at: parse_time(row.try_get::<String, _>("created_at")?)?,
         updated_at: parse_time(row.try_get::<String, _>("updated_at")?)?,
     })
@@ -1031,7 +1194,9 @@ fn stage_type_text(stage: &StageType) -> &'static str {
     match stage {
         StageType::TranscriptExtraction => "transcript_extraction",
         StageType::ScriptRewrite => "script_rewrite",
+        StageType::ScriptPlanning => "script_planning",
         StageType::StoryboardGeneration => "storyboard_generation",
+        StageType::TtsSynthesis => "tts_synthesis",
         StageType::SegmentGeneration => "segment_generation",
         StageType::FinalRender => "final_render",
     }
@@ -1070,7 +1235,9 @@ fn parse_stage_option(value: Option<String>) -> Option<StageType> {
 fn parse_stage_type(value: String) -> StageType {
     match value.as_str() {
         "script_rewrite" => StageType::ScriptRewrite,
+        "script_planning" => StageType::ScriptPlanning,
         "storyboard_generation" => StageType::StoryboardGeneration,
+        "tts_synthesis" => StageType::TtsSynthesis,
         "segment_generation" => StageType::SegmentGeneration,
         "final_render" => StageType::FinalRender,
         _ => StageType::TranscriptExtraction,
@@ -1089,7 +1256,9 @@ fn parse_stage_status(value: String) -> StageStatus {
 
 fn parse_asset_type(value: String) -> AssetType {
     match value.as_str() {
+        "source_image" => AssetType::SourceImage,
         "audio" => AssetType::Audio,
+        "tts_segment" => AssetType::TtsSegment,
         "keyframe" => AssetType::Keyframe,
         "generated_frame" => AssetType::GeneratedFrame,
         "video_segment" => AssetType::VideoSegment,
@@ -1160,13 +1329,37 @@ fn display_stage_type_str(value: &str) -> String {
 fn asset_type_text(asset_type: &AssetType) -> &'static str {
     match asset_type {
         AssetType::SourceVideo => "source_video",
+        AssetType::SourceImage => "source_image",
         AssetType::Audio => "audio",
+        AssetType::TtsSegment => "tts_segment",
         AssetType::Keyframe => "keyframe",
         AssetType::GeneratedFrame => "generated_frame",
         AssetType::VideoSegment => "video_segment",
         AssetType::Subtitle => "subtitle",
         AssetType::FinalVideo => "final_video",
     }
+}
+
+fn task_type_text(task_type: &WorkflowTaskType) -> &'static str {
+    match task_type {
+        WorkflowTaskType::Replicate => "replicate",
+        WorkflowTaskType::ImageToVideo => "image_to_video",
+    }
+}
+
+fn parse_task_type(value: &str) -> WorkflowTaskType {
+    match value {
+        "image_to_video" => WorkflowTaskType::ImageToVideo,
+        _ => WorkflowTaskType::Replicate,
+    }
+}
+
+pub fn workflow_task_type_from_config(config: &Value) -> WorkflowTaskType {
+    config
+        .get("taskType")
+        .and_then(Value::as_str)
+        .map(parse_task_type)
+        .unwrap_or(WorkflowTaskType::Replicate)
 }
 
 fn parse_time(value: String) -> AppResult<chrono::DateTime<Utc>> {
@@ -1249,6 +1442,7 @@ fn default_provider_base_url(provider: &str) -> &'static str {
         "DEEPSEEK" => "https://api.deepseek.com",
         "QWEN_VL" => "https://dashscope.aliyuncs.com/api/v1",
         "TONGYI" => "https://dashscope.aliyuncs.com/api/v1",
+        "COSYVOICE" => "https://dashscope.aliyuncs.com/api/v1",
         "SEEDANCE" => "https://ark.cn-beijing.volces.com/api/v3",
         _ => "https://api.example.com",
     }

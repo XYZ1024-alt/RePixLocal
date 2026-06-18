@@ -2,12 +2,14 @@ import { useState } from "react";
 import {
   CheckCircle2,
   FileVideo,
+  Image as ImageIcon,
   Loader2,
   SlidersHorizontal,
   UploadCloud,
+  X,
   type LucideIcon
 } from "lucide-react";
-import { createTask, getLatestRun, pickVideoFile, submitTask } from "@/api";
+import { createTask, getLatestRun, pickImageFiles, pickVideoFile, submitTask } from "@/api";
 import { PageHeader } from "@/components/PageHeader";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,6 +22,8 @@ import {
   LANGUAGES,
   MAX_SCENE_COUNT,
   MAX_SOURCE_SUBTITLE_REGION_RATIO,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGES,
   MAX_UPLOAD_BYTES,
   MIN_SCENE_COUNT,
   MIN_SOURCE_SUBTITLE_REGION_RATIO,
@@ -28,17 +32,22 @@ import {
   REWRITE_TONES,
   SOURCE_SUBTITLE_TREATMENTS,
   SUBTITLE_POSITIONS,
+  TASK_TYPES,
   VOICES,
   taskConfigSchema,
   type TaskConfig
 } from "@/lib/task-schema";
 import { cn } from "@/lib/utils";
-import type { PickedVideoFile } from "@/types";
+import type { PickedImageFile, PickedVideoFile } from "@/types";
 
 type Phase = "idle" | "creating" | "submitting" | "done";
 type StepStatus = "active" | "completed" | "pending";
 
 const DEFAULT_CONFIG: TaskConfig = {
+  taskType: "replicate",
+  audioSource: "tts",
+  requirements: "",
+  imagePaths: [],
   resolution: "1080p",
   aspectRatio: "16:9",
   language: "zh",
@@ -67,11 +76,15 @@ export function TaskWizardView(props: {
   const t = useTranslations("wizard");
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<PickedVideoFile | null>(null);
+  const [images, setImages] = useState<PickedImageFile[]>([]);
   const [config, setConfig] = useState<TaskConfig>(DEFAULT_CONFIG);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const busy = phase !== "idle" && phase !== "done";
-  const sourceReady = Boolean(file && title.trim());
+  const isImageTask = config.taskType === "image_to_video";
+  const sourceReady = Boolean(
+    title.trim() && (isImageTask ? images.length > 0 && config.requirements?.trim() : file)
+  );
   const optionsReady = taskConfigSchema.safeParse(config).success;
   const steps = getWizardSteps({ sourceReady, optionsReady, phase, t });
 
@@ -91,24 +104,71 @@ export function TaskWizardView(props: {
     }
   }
 
+  async function handlePickImages() {
+    if (busy) return;
+    const picked = await pickImageFiles();
+    if (!picked.length) return;
+    const validationError = validatePickedImages(picked, t);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setError(null);
+    setImages(picked.slice(0, MAX_IMAGES));
+    setConfig((current) => ({
+      ...current,
+      imagePaths: picked.slice(0, MAX_IMAGES).map((image) => image.path),
+      sceneCount: Math.min(picked.length, MAX_IMAGES)
+    }));
+    if (!title.trim() && picked[0]) {
+      setTitle(picked[0].name.replace(/\.[^.]+$/, ""));
+    }
+  }
+
+  function removeImage(index: number) {
+    setImages((current) => {
+      const next = current.filter((_, itemIndex) => itemIndex !== index);
+      setConfig((configState) => ({
+        ...configState,
+        imagePaths: next.map((image) => image.path),
+        sceneCount: Math.max(next.length, MIN_SCENE_COUNT)
+      }));
+      return next;
+    });
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
-    if (!file) {
-      setError(t("selectFirst"));
-      return;
-    }
     if (!title.trim()) {
       setError(t("invalidInput"));
+      return;
+    }
+    if (isImageTask) {
+      if (!images.length) {
+        setError(t("selectImagesFirst"));
+        return;
+      }
+      if (!config.requirements?.trim()) {
+        setError(t("requirementsRequired"));
+        return;
+      }
+    } else if (!file) {
+      setError(t("selectFirst"));
       return;
     }
 
     try {
       setPhase("creating");
+      const payloadConfig = {
+        ...config,
+        imagePaths: isImageTask ? images.map((image) => image.path) : undefined,
+        sceneCount: isImageTask ? images.length : config.sceneCount
+      };
       const task = await createTask({
         title: title.trim(),
-        source_path: file.path,
-        config_json: config
+        source_path: isImageTask ? "" : file!.path,
+        config_json: payloadConfig
       });
       setPhase("submitting");
       let runId: string | null = null;
@@ -133,6 +193,7 @@ export function TaskWizardView(props: {
   function resetForm() {
     setTitle("");
     setFile(null);
+    setImages([]);
     setConfig(DEFAULT_CONFIG);
     setError(null);
     setPhase("idle");
@@ -147,13 +208,36 @@ export function TaskWizardView(props: {
       >
         <WizardProgress steps={steps} />
         <div className="flex min-w-0 flex-col gap-4">
-          <SourceSection
+          <ModeSection
             busy={busy}
-            file={file}
-            title={title}
-            onPickFile={handlePickFile}
-            onTitleChange={setTitle}
+            taskType={config.taskType}
+            onTaskTypeChange={(taskType) => {
+              setConfig((current) => ({ ...current, taskType }));
+              setError(null);
+            }}
           />
+          {isImageTask ? (
+            <ImageSourceSection
+              busy={busy}
+              images={images}
+              requirements={config.requirements ?? ""}
+              title={title}
+              onPickImages={handlePickImages}
+              onRemoveImage={removeImage}
+              onRequirementsChange={(requirements) =>
+                setConfig((current) => ({ ...current, requirements }))
+              }
+              onTitleChange={setTitle}
+            />
+          ) : (
+            <SourceSection
+              busy={busy}
+              file={file}
+              title={title}
+              onPickFile={handlePickFile}
+              onTitleChange={setTitle}
+            />
+          )}
           <PipelineSection busy={busy} config={config} onConfigChange={setConfig} />
           {error ? (
             <p className="rounded-md border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
@@ -292,6 +376,114 @@ function StepIndex({ index, status }: { index: number; status: StepStatus }) {
   );
 }
 
+function ModeSection(props: {
+  busy: boolean;
+  taskType: TaskConfig["taskType"];
+  onTaskTypeChange: (taskType: TaskConfig["taskType"]) => void;
+}) {
+  const t = useTranslations("wizard");
+  return (
+    <Panel icon={SlidersHorizontal} title={t("taskMode")}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {TASK_TYPES.map((taskType) => (
+          <button
+            key={taskType}
+            type="button"
+            disabled={props.busy}
+            onClick={() => props.onTaskTypeChange(taskType)}
+            className={cn(
+              "rounded-lg border px-4 py-3 text-left transition-colors",
+              props.taskType === taskType
+                ? "border-blue-400/50 bg-blue-500/10 text-blue-100"
+                : "border-white/10 bg-[#0b1625] text-slate-300 hover:border-white/20"
+            )}
+          >
+            <span className="block text-sm font-semibold">{t(`options.taskType.${taskType}`)}</span>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {t(`options.taskTypeDesc.${taskType}`)}
+            </span>
+          </button>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function ImageSourceSection(props: {
+  busy: boolean;
+  images: PickedImageFile[];
+  requirements: string;
+  title: string;
+  onPickImages: () => void;
+  onRemoveImage: (index: number) => void;
+  onRequirementsChange: (value: string) => void;
+  onTitleChange: (value: string) => void;
+}) {
+  const t = useTranslations("wizard");
+  return (
+    <Panel icon={ImageIcon} title={t("sourceImages")}>
+      <div
+        onClick={() => !props.busy && props.onPickImages()}
+        className={cn(
+          "flex cursor-pointer items-center gap-4 rounded-lg border border-dashed border-blue-400/25 bg-blue-500/[0.05] p-4 transition-colors hover:border-blue-300/60",
+          props.busy && "pointer-events-none opacity-60"
+        )}
+      >
+        <span className="flex size-16 shrink-0 items-center justify-center rounded-md bg-[#0b1625] ring-1 ring-white/10">
+          <UploadCloud className="size-7 text-blue-300" />
+        </span>
+        <div className="flex flex-1 flex-col gap-1">
+          <span className="text-sm font-semibold">{t("pickImages")}</span>
+          <span className="text-xs text-muted-foreground">{t("pickImagesDesc")}</span>
+        </div>
+      </div>
+      {props.images.length ? (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {props.images.map((image, index) => (
+            <div
+              key={image.path}
+              className="flex items-center justify-between gap-2 rounded-md border border-white/10 bg-[#0b1625] px-3 py-2"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{image.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t("sceneLabel", { index: index + 1 })} · {formatSize(image.size_bytes)}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={props.busy}
+                onClick={() => props.onRemoveImage(index)}
+                className="rounded-md p-1 text-slate-400 hover:bg-white/5 hover:text-red-300"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <Field label={t("requirements")}>
+        <textarea
+          value={props.requirements}
+          onChange={(event) => props.onRequirementsChange(event.target.value)}
+          placeholder={t("requirementsPlaceholder")}
+          className={cn(inputClass, "min-h-28 resize-y py-2")}
+          disabled={props.busy}
+        />
+      </Field>
+      <Field label={t("taskTitle")}>
+        <input
+          value={props.title}
+          onChange={(event) => props.onTitleChange(event.target.value)}
+          placeholder={t("taskTitlePlaceholder")}
+          className={inputClass}
+          disabled={props.busy}
+        />
+      </Field>
+    </Panel>
+  );
+}
+
 function SourceSection(props: {
   busy: boolean;
   file: PickedVideoFile | null;
@@ -348,6 +540,7 @@ function PipelineSection(props: {
   onConfigChange: (config: TaskConfig) => void;
 }) {
   const t = useTranslations("wizard");
+  const isImageTask = props.config.taskType === "image_to_video";
   const update = <K extends keyof TaskConfig>(key: K, value: TaskConfig[K]) =>
     props.onConfigChange({ ...props.config, [key]: value });
 
@@ -358,31 +551,45 @@ function PipelineSection(props: {
         <ConfigSelect labelKey="aspectRatio" value={props.config.aspectRatio} onChange={(value) => update("aspectRatio", value)} options={ASPECT_RATIOS} disabled={props.busy} />
         <ConfigSelect labelKey="language" value={props.config.language} onChange={(value) => update("language", value)} options={LANGUAGES} disabled={props.busy} />
         <ConfigSelect labelKey="rewriteTone" value={props.config.rewriteTone} onChange={(value) => update("rewriteTone", value)} options={REWRITE_TONES} disabled={props.busy} />
-        <ConfigSelect labelKey="rewriteLength" value={props.config.rewriteLength} onChange={(value) => update("rewriteLength", value)} options={REWRITE_LENGTHS} disabled={props.busy} />
+        {!isImageTask ? (
+          <ConfigSelect labelKey="rewriteLength" value={props.config.rewriteLength} onChange={(value) => update("rewriteLength", value)} options={REWRITE_LENGTHS} disabled={props.busy} />
+        ) : null}
         <ConfigSelect labelKey="voice" value={props.config.voice} onChange={(value) => update("voice", value)} options={VOICES} disabled={props.busy} />
-        <Field label={t("sceneCount")}>
-          <input
-            type="number"
-            min={MIN_SCENE_COUNT}
-            max={MAX_SCENE_COUNT}
-            value={props.config.sceneCount}
-            onChange={(event) => update("sceneCount", Number(event.target.value))}
-            className={inputClass}
-            disabled={props.busy}
-          />
-        </Field>
-        <Field label={t("sourceSubtitleTreatment")}>
-          <SelectInput
-            value={props.config.sourceSubtitleTreatment}
-            onChange={(sourceSubtitleTreatment) =>
-              props.onConfigChange({ ...props.config, sourceSubtitleTreatment })
-            }
-            options={SOURCE_SUBTITLE_TREATMENTS}
-            disabled={props.busy}
-            getLabel={(option) => t(`options.sourceSubtitleTreatment.${option}`)}
-          />
-        </Field>
-        {props.config.sourceSubtitleTreatment === "blur" ? (
+        {!isImageTask ? (
+          <Field label={t("sceneCount")}>
+            <input
+              type="number"
+              min={MIN_SCENE_COUNT}
+              max={MAX_SCENE_COUNT}
+              value={props.config.sceneCount}
+              onChange={(event) => update("sceneCount", Number(event.target.value))}
+              className={inputClass}
+              disabled={props.busy}
+            />
+          </Field>
+        ) : (
+          <Field label={t("sceneCount")}>
+            <input
+              value={props.config.imagePaths?.length ?? 0}
+              readOnly
+              className={cn(inputClass, "opacity-70")}
+            />
+          </Field>
+        )}
+        {!isImageTask ? (
+          <Field label={t("sourceSubtitleTreatment")}>
+            <SelectInput
+              value={props.config.sourceSubtitleTreatment}
+              onChange={(sourceSubtitleTreatment) =>
+                props.onConfigChange({ ...props.config, sourceSubtitleTreatment })
+              }
+              options={SOURCE_SUBTITLE_TREATMENTS}
+              disabled={props.busy}
+              getLabel={(option) => t(`options.sourceSubtitleTreatment.${option}`)}
+            />
+          </Field>
+        ) : null}
+        {!isImageTask && props.config.sourceSubtitleTreatment === "blur" ? (
           <Field label={t("sourceSubtitleRegionRatio")}>
             <input
               type="number"
@@ -494,6 +701,22 @@ function SelectInput<T extends string>(props: {
       ))}
     </select>
   );
+}
+
+function validatePickedImages(images: PickedImageFile[], t: (key: string, values?: Record<string, number | string>) => string) {
+  if (images.length > MAX_IMAGES) {
+    return t("tooManyImages", { count: MAX_IMAGES });
+  }
+  for (const image of images) {
+    const ext = image.name.split(".").pop()?.toLowerCase();
+    if (!ext || !["png", "jpg", "jpeg", "webp"].includes(ext)) {
+      return t("unsupportedImageType");
+    }
+    if (image.size_bytes > MAX_IMAGE_BYTES) {
+      return t("imageTooLarge");
+    }
+  }
+  return null;
 }
 
 function validatePickedFile(file: PickedVideoFile, t: (key: string) => string) {

@@ -58,7 +58,9 @@ fn default_root() -> AppResult<PathBuf> {
 fn task_dirs(task_root: PathBuf) -> Vec<PathBuf> {
     [
         "source",
+        "source/images",
         "audio",
+        "tts",
         "keyframes",
         "frames",
         "segments",

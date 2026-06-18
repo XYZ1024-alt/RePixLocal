@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use serde_json::json;
+use serde_json::{json, Value};
 use tauri::AppHandle;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -12,14 +12,16 @@ use crate::errors::{AppError, AppResult};
 use crate::media::ffmpeg::FfmpegRunner;
 use crate::media::frames::{extract_keyframes, KeyframeOptions, DEFAULT_SUBTITLE_REGION_RATIO};
 use crate::media::subtitles::{
-    ass_style_from_config, build_ass, cues_from_segments, read_segments_from_json, segments_to_json,
-    transcript_text,
+    ass_style_from_config, build_ass, cues_from_scenes_with_tts, read_segments_from_json,
+    segments_to_json, transcript_text,
 };
 use crate::media::whisper::WhisperRunner;
-use crate::models::{AssetType, Scene, StageType, Task, TaskStatus};
+use crate::models::{AssetType, Scene, StageType, Task, TaskStatus, WorkflowTaskType};
+use crate::providers::cosyvoice::CosyVoiceClient;
 use crate::providers::deepseek::DeepSeekClient;
 use crate::providers::fetch::download_to_file;
 use crate::providers::qwen_vl::QwenVlClient;
+use crate::providers::http_client::is_transient_provider_error;
 use crate::providers::seedance::{SegmentPollStatus, SeedanceClient};
 use crate::providers::tongyi::TongyiClient;
 use crate::storage::local_assets::{asset_for_path, mock_transcript_segments, AssetManager};
@@ -73,10 +75,18 @@ impl PipelineRunner {
             .get_task(task_id)
             .await?
             .ok_or_else(|| AppError::Workflow(format!("task not found: {task_id}")))?;
-        let scene_count = scene_count_from_config(&task.config_json);
-        let source_video = self.assets.find_source_video(task_id).await?;
+        let task_type = task.task_type;
+        let scene_count = scene_count_from_config(&task.config_json, task_type);
+        let source_video = if task_type == WorkflowTaskType::Replicate {
+            Some(self.assets.find_source_video(task_id).await?)
+        } else {
+            None
+        };
 
-        for stage in ordered_stages() {
+        for (order_index, stage) in ordered_stages(task_type)
+            .into_iter()
+            .enumerate()
+        {
             if self.is_canceled(task_id).await? {
                 self.cancel_pipeline(task_id, run_id, app).await?;
                 return Ok(());
@@ -87,9 +97,10 @@ impl PipelineRunner {
                     run_id,
                     app,
                     &stage,
+                    order_index as i32,
                     &task,
                     scene_count,
-                    &source_video,
+                    source_video.as_deref(),
                     mock,
                 )
                 .await;
@@ -120,9 +131,10 @@ impl PipelineRunner {
         run_id: &str,
         app: &AppHandle,
         stage: &StageType,
+        _order_index: i32,
         task: &Task,
         scene_count: i32,
-        source_video: &std::path::Path,
+        source_video: Option<&std::path::Path>,
         mock: bool,
     ) -> AppResult<()> {
         if mock {
@@ -134,14 +146,21 @@ impl PipelineRunner {
                     self.mock_rewrite_stage(task_id, run_id, app, task, scene_count)
                         .await
                 }
+                StageType::ScriptPlanning => {
+                    self.mock_script_planning_stage(task_id, run_id, app, task, scene_count)
+                        .await
+                }
                 StageType::StoryboardGeneration => {
                     self.mock_storyboard_stage(task_id, run_id, app, scene_count)
                         .await
                 }
-                StageType::SegmentGeneration => {
-                    self.mock_segment_stage(task_id, run_id, app, scene_count, source_video)
+                StageType::TtsSynthesis => {
+                    self.mock_tts_stage(task_id, run_id, app, scene_count)
                         .await
                 }
+                StageType::SegmentGeneration => self
+                    .mock_segment_stage(task_id, run_id, app, scene_count, source_video)
+                    .await,
                 StageType::FinalRender => {
                     self.mock_render_stage(task_id, run_id, app, source_video)
                         .await
@@ -151,15 +170,29 @@ impl PipelineRunner {
 
         match stage {
             StageType::TranscriptExtraction => {
+                let source_video = source_video.ok_or_else(|| {
+                    AppError::Workflow("source video missing for replicate task".into())
+                })?;
                 self.real_transcript_stage(task_id, run_id, app, task, source_video)
                     .await
             }
             StageType::ScriptRewrite => {
+                let source_video = source_video.ok_or_else(|| {
+                    AppError::Workflow("source video missing for replicate task".into())
+                })?;
                 self.real_rewrite_stage(task_id, run_id, app, task, scene_count, source_video)
+                    .await
+            }
+            StageType::ScriptPlanning => {
+                self.real_script_planning_stage(task_id, run_id, app, task, scene_count)
                     .await
             }
             StageType::StoryboardGeneration => {
                 self.real_storyboard_stage(task_id, run_id, app, task).await
+            }
+            StageType::TtsSynthesis => {
+                self.real_tts_stage(task_id, run_id, app, task, scene_count)
+                    .await
             }
             StageType::SegmentGeneration => {
                 self.real_segment_stage(task_id, run_id, app, scene_count)
@@ -556,6 +589,250 @@ impl PipelineRunner {
             .await
     }
 
+    async fn real_script_planning_stage(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+        task: &Task,
+        scene_count: i32,
+    ) -> AppResult<()> {
+        self.begin_stage(run_id, &StageType::ScriptPlanning, app)
+            .await?;
+        if script_planning_outputs_ready(&self.assets, task_id, scene_count).await? {
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                "Script planning outputs already exist; skipping",
+            )
+            .await?;
+            return self
+                .complete_stage(run_id, &StageType::ScriptPlanning, app)
+                .await;
+        }
+
+        let requirements = requirements_from_config(&task.config_json)?;
+        self.log(
+            task_id,
+            run_id,
+            app,
+            "info",
+            &format!("Analyzing {scene_count} images with Qwen-VL"),
+        )
+        .await?;
+        let mut image_paths = Vec::with_capacity(scene_count as usize);
+        for index in 0..scene_count {
+            let path = self.assets.source_image_path(task_id, index);
+            if !path.exists() {
+                return Err(AppError::Workflow(format!(
+                    "source image missing for scene {index}"
+                )));
+            }
+            image_paths.push(path);
+        }
+        let qwen = QwenVlClient::new(self.repo.clone());
+        let analysis = qwen.analyze_video_frames(&image_paths).await?;
+        self.record_usage(
+            "QWEN_VL",
+            task_id,
+            run_id,
+            "multimodal-generation/generation",
+            "images",
+            analysis.frame_count as f64,
+        )
+        .await?;
+
+        let tone = task
+            .config_json
+            .get("rewriteTone")
+            .and_then(|value| value.as_str())
+            .unwrap_or("faithful");
+        self.log(task_id, run_id, app, "info", "Planning script from images and brief")
+            .await?;
+        let deepseek = DeepSeekClient::new(self.repo.clone());
+        let scenes = deepseek
+            .plan_script_from_images(
+                &requirements,
+                &analysis.descriptions,
+                tone,
+                scene_count,
+            )
+            .await?;
+        self.record_usage(
+            "DEEPSEEK",
+            task_id,
+            run_id,
+            "chat/completions",
+            "tokens",
+            scene_count as f64 * 150.0,
+        )
+        .await?;
+
+        for scene in scenes {
+            let source_image = self.assets.source_image_path(task_id, scene.index);
+            let frame_path = self.assets.frame_path(task_id, scene.index);
+            self.assets.copy_file(&source_image, &frame_path).await?;
+            let frame = asset_for_path(
+                task_id,
+                run_id,
+                AssetType::GeneratedFrame,
+                frame_path.clone(),
+                "image/png",
+                Some(scene.index),
+            );
+            self.repo.insert_asset(&frame).await?;
+            let visual = analysis
+                .descriptions
+                .get(scene.index as usize)
+                .cloned();
+            let metadata_json = Some(json!({
+                "sourceImagePath": source_image.to_string_lossy(),
+                "framePath": frame_path.to_string_lossy(),
+            }));
+            self.repo
+                .insert_scene(&Scene {
+                    id: Uuid::new_v4().to_string(),
+                    task_id: task_id.to_string(),
+                    run_id: Some(run_id.to_string()),
+                    scene_index: scene.index,
+                    script_text: scene.script_text,
+                    visual_prompt: visual,
+                    motion_prompt: scene.motion_prompt,
+                    metadata_json,
+                    created_at: Utc::now(),
+                })
+                .await?;
+        }
+
+        self.complete_stage(run_id, &StageType::ScriptPlanning, app)
+            .await
+    }
+
+    async fn real_tts_stage(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+        task: &Task,
+        scene_count: i32,
+    ) -> AppResult<()> {
+        self.begin_stage(run_id, &StageType::TtsSynthesis, app).await?;
+        if tts_outputs_ready(&self.assets, task_id, scene_count) {
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                "TTS outputs already exist; skipping",
+            )
+            .await?;
+            return self
+                .complete_stage(run_id, &StageType::TtsSynthesis, app)
+                .await;
+        }
+
+        let cosyvoice = CosyVoiceClient::new(self.repo.clone());
+        let voice = task
+            .config_json
+            .get("voice")
+            .and_then(|value| value.as_str())
+            .unwrap_or("female-1");
+        let language = task
+            .config_json
+            .get("language")
+            .and_then(|value| value.as_str());
+        let scenes = self.scenes_for_run(task_id, run_id).await?;
+        if scenes.is_empty() {
+            return Err(AppError::Workflow(
+                "no scenes found for TTS synthesis".into(),
+            ));
+        }
+
+        let mut segment_paths = Vec::with_capacity(scene_count as usize);
+        for index in 0..scene_count {
+            let scene = scenes
+                .iter()
+                .find(|scene| scene.scene_index == index)
+                .ok_or_else(|| AppError::Workflow(format!("scene {index} not found")))?;
+            let tts_path = self.assets.tts_segment_path(task_id, index);
+            if tts_path.exists() {
+                segment_paths.push(tts_path);
+                continue;
+            }
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                &format!("Scene {index}: synthesizing TTS with CosyVoice"),
+            )
+            .await?;
+            cosyvoice
+                .synthesize_to_file(
+                    &scene.script_text,
+                    voice,
+                    language,
+                    &tts_path,
+                )
+                .await?;
+            let duration_secs = self.ffmpeg.probe_duration(&tts_path).await?;
+            let duration_ms = (duration_secs * 1000.0).round() as i64;
+            let mut metadata = scene
+                .metadata_json
+                .clone()
+                .unwrap_or_else(|| json!({}));
+            if let Some(object) = metadata.as_object_mut() {
+                object.insert(
+                    "ttsDurationMs".to_string(),
+                    Value::Number(duration_ms.into()),
+                );
+            }
+            self.repo
+                .update_scene_metadata(&scene.id, &metadata)
+                .await?;
+            let tts_asset = asset_for_path(
+                task_id,
+                run_id,
+                AssetType::TtsSegment,
+                tts_path.clone(),
+                "audio/wav",
+                Some(index),
+            );
+            self.repo.insert_asset(&tts_asset).await?;
+            segment_paths.push(tts_path);
+            self.record_usage(
+                "COSYVOICE",
+                task_id,
+                run_id,
+                "audio/tts/SpeechSynthesizer",
+                "characters",
+                scene.script_text.chars().count() as f64,
+            )
+            .await?;
+        }
+
+        let narration_path = self.assets.narration_path(task_id);
+        self.log(task_id, run_id, app, "info", "Concatenating TTS segments")
+            .await?;
+        self.ffmpeg
+            .concat_audio(&segment_paths, &narration_path)
+            .await?;
+        let narration = asset_for_path(
+            task_id,
+            run_id,
+            AssetType::Audio,
+            narration_path,
+            "audio/wav",
+            None,
+        );
+        self.repo.insert_asset(&narration).await?;
+
+        self.complete_stage(run_id, &StageType::TtsSynthesis, app)
+            .await
+    }
+
     async fn real_segment_stage(
         &self,
         task_id: &str,
@@ -599,17 +876,43 @@ impl PipelineRunner {
             let motion = scene.motion_prompt.as_deref();
             let duration_sec = scene_duration_secs(scene);
             let frame_key = format!("tasks/{task_id}/frames/{index}.png");
-            self.log(
-                task_id,
-                run_id,
-                app,
-                "info",
-                &format!("Scene {index}: submitting video segment to Seedance"),
-            )
-            .await?;
-            let job_id = seedance
-                .submit_segment(&oss, &frame_key, &frame_path, duration_sec, motion)
+            let job_id = if let Some(job_id) = scene_seedance_job_id(scene) {
+                self.log(
+                    task_id,
+                    run_id,
+                    app,
+                    "info",
+                    &format!("Scene {index}: resuming Seedance job {job_id}"),
+                )
                 .await?;
+                job_id
+            } else {
+                self.log(
+                    task_id,
+                    run_id,
+                    app,
+                    "info",
+                    &format!("Scene {index}: submitting video segment to Seedance"),
+                )
+                .await?;
+                let job_id = seedance
+                    .submit_segment(&oss, &frame_key, &frame_path, duration_sec, motion)
+                    .await?;
+                let mut metadata = scene
+                    .metadata_json
+                    .clone()
+                    .unwrap_or_else(|| json!({}));
+                if let Some(object) = metadata.as_object_mut() {
+                    object.insert(
+                        "seedanceJobId".to_string(),
+                        Value::String(job_id.clone()),
+                    );
+                }
+                self.repo
+                    .update_scene_metadata(&scene.id, &metadata)
+                    .await?;
+                job_id
+            };
             self.log(
                 task_id,
                 run_id,
@@ -673,6 +976,8 @@ impl PipelineRunner {
                 "Final video already exists; skipping render",
             )
             .await?;
+            self.ensure_final_video_asset(task_id, run_id, &final_path)
+                .await?;
             return self.complete_stage(run_id, &StageType::FinalRender, app).await;
         }
 
@@ -704,25 +1009,25 @@ impl PipelineRunner {
                 .concat_segments(&segment_paths, &concat_path)
                 .await?;
 
-            let subtitle_path = self.assets.subtitle_path(task_id);
-            let segments = read_segments_from_json(&subtitle_path).await?;
-            let cues = cues_from_segments(&segments);
+            let narration_path = self.assets.narration_path(task_id);
+            let audio = if narration_path.exists() {
+                Some(narration_path)
+            } else {
+                None
+            };
+            let video_size = self.ffmpeg.probe_video_size(&concat_path).await.ok();
+            let scenes = self.scenes_for_run(task_id, run_id).await?;
+            let cues = cues_from_scenes_with_tts(&scenes);
             let ass_path = workdir.join("subs.ass");
             build_ass(
                 &cues,
                 &ass_path,
                 &ass_style_from_config(&task.config_json),
+                video_size,
             )
             .await?;
 
-            let audio_path = self.assets.audio_path(task_id);
-            let audio = if audio_path.exists() {
-                Some(audio_path)
-            } else {
-                None
-            };
-
-            self.log(task_id, run_id, app, "info", "Muxing audio + burning subtitles")
+            self.log(task_id, run_id, app, "info", "Muxing TTS audio + burning subtitles")
                 .await?;
             let rendered_path = workdir.join("rendered.mp4");
             self.ffmpeg
@@ -784,7 +1089,29 @@ impl PipelineRunner {
                 self.cancel_pipeline(task_id, run_id, app).await?;
                 return Err(AppError::Workflow("workflow canceled".into()));
             }
-            let polled = seedance.poll_segment(job_id).await?;
+            let polled = match seedance.poll_segment(job_id).await {
+                Ok(result) => result,
+                Err(AppError::Provider(message)) if is_transient_provider_error(&message) => {
+                    if tokio::time::Instant::now() > deadline {
+                        return Err(AppError::Provider(format!(
+                            "Scene {scene_index}: segment timed out after {SEGMENT_TIMEOUT_SECS}s (last error: {message})"
+                        )));
+                    }
+                    self.log(
+                        task_id,
+                        run_id,
+                        app,
+                        "warn",
+                        &format!(
+                            "Scene {scene_index}: Seedance poll network error, retrying in {SEGMENT_POLL_INTERVAL_SECS}s"
+                        ),
+                    )
+                    .await?;
+                    sleep(Duration::from_secs(SEGMENT_POLL_INTERVAL_SECS)).await;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             match polled.status {
                 SegmentPollStatus::Ready => {
                     return polled.source_url.ok_or_else(|| {
@@ -806,6 +1133,30 @@ impl PipelineRunner {
                 }
             }
         }
+    }
+
+    async fn ensure_final_video_asset(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        final_path: &std::path::Path,
+    ) -> AppResult<()> {
+        if self
+            .repo
+            .has_task_asset(task_id, AssetType::FinalVideo)
+            .await?
+        {
+            return Ok(());
+        }
+        let final_video = asset_for_path(
+            task_id,
+            run_id,
+            AssetType::FinalVideo,
+            final_path.to_path_buf(),
+            "video/mp4",
+            None,
+        );
+        self.repo.insert_asset(&final_video).await
     }
 
     async fn cancel_pipeline(
@@ -966,6 +1317,131 @@ impl PipelineRunner {
             .await
     }
 
+    async fn mock_script_planning_stage(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+        task: &Task,
+        scene_count: i32,
+    ) -> AppResult<()> {
+        self.begin_stage(run_id, &StageType::ScriptPlanning, app)
+            .await?;
+        let tone = task
+            .config_json
+            .get("rewriteTone")
+            .and_then(|value| value.as_str())
+            .unwrap_or("faithful");
+        for index in 0..scene_count {
+            let source_image = self.assets.source_image_path(task_id, index);
+            if !source_image.exists() {
+                self.assets.write_minimal_png(&source_image).await?;
+            }
+            let frame_path = self.assets.frame_path(task_id, index);
+            self.assets.copy_file(&source_image, &frame_path).await?;
+            let frame = asset_for_path(
+                task_id,
+                run_id,
+                AssetType::GeneratedFrame,
+                frame_path.clone(),
+                "image/png",
+                Some(index),
+            );
+            self.repo.insert_asset(&frame).await?;
+            let scene = Scene {
+                id: Uuid::new_v4().to_string(),
+                task_id: task_id.to_string(),
+                run_id: Some(run_id.to_string()),
+                scene_index: index,
+                script_text: format!(
+                    "[{tone}] Mock narration for scene {}.",
+                    index + 1
+                ),
+                visual_prompt: Some(format!("Mock visual for scene {index}")),
+                motion_prompt: Some("slow zoom in".to_string()),
+                metadata_json: Some(json!({
+                    "sourceImagePath": source_image.to_string_lossy(),
+                    "framePath": frame_path.to_string_lossy(),
+                })),
+                created_at: Utc::now(),
+            };
+            self.repo.insert_scene(&scene).await?;
+        }
+        self.record_usage(
+            "DEEPSEEK",
+            task_id,
+            run_id,
+            "chat/completions",
+            "tokens",
+            scene_count as f64 * 150.0,
+        )
+        .await?;
+        self.complete_stage(run_id, &StageType::ScriptPlanning, app)
+            .await
+    }
+
+    async fn mock_tts_stage(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        app: &AppHandle,
+        scene_count: i32,
+    ) -> AppResult<()> {
+        self.begin_stage(run_id, &StageType::TtsSynthesis, app).await?;
+        let scenes = self.scenes_for_run(task_id, run_id).await?;
+        let mut segment_paths = Vec::with_capacity(scene_count as usize);
+        for index in 0..scene_count {
+            let tts_path = self.assets.tts_segment_path(task_id, index);
+            self.assets.write_mock_wav(&tts_path).await?;
+            if let Some(scene) = scenes.iter().find(|scene| scene.scene_index == index) {
+                let mut metadata = scene
+                    .metadata_json
+                    .clone()
+                    .unwrap_or_else(|| json!({}));
+                if let Some(object) = metadata.as_object_mut() {
+                    object.insert("ttsDurationMs".to_string(), Value::Number(3000.into()));
+                }
+                self.repo
+                    .update_scene_metadata(&scene.id, &metadata)
+                    .await?;
+            }
+            let tts_asset = asset_for_path(
+                task_id,
+                run_id,
+                AssetType::TtsSegment,
+                tts_path.clone(),
+                "audio/wav",
+                Some(index),
+            );
+            self.repo.insert_asset(&tts_asset).await?;
+            segment_paths.push(tts_path);
+        }
+        let narration_path = self.assets.narration_path(task_id);
+        self.ffmpeg
+            .concat_audio(&segment_paths, &narration_path)
+            .await?;
+        let narration = asset_for_path(
+            task_id,
+            run_id,
+            AssetType::Audio,
+            narration_path,
+            "audio/wav",
+            None,
+        );
+        self.repo.insert_asset(&narration).await?;
+        self.record_usage(
+            "COSYVOICE",
+            task_id,
+            run_id,
+            "audio/tts/SpeechSynthesizer",
+            "characters",
+            scene_count as f64 * 40.0,
+        )
+        .await?;
+        self.complete_stage(run_id, &StageType::TtsSynthesis, app)
+            .await
+    }
+
     async fn mock_storyboard_stage(
         &self,
         task_id: &str,
@@ -1016,13 +1492,21 @@ impl PipelineRunner {
         run_id: &str,
         app: &AppHandle,
         scene_count: i32,
-        source_video: &std::path::Path,
+        source_video: Option<&std::path::Path>,
     ) -> AppResult<()> {
         self.begin_stage(run_id, &StageType::SegmentGeneration, app)
             .await?;
         for index in 0..scene_count {
             let segment_path = self.assets.segment_path(task_id, index);
-            self.assets.copy_file(source_video, &segment_path).await?;
+            if let Some(source_video) = source_video {
+                self.assets.copy_file(source_video, &segment_path).await?;
+            } else {
+                let frame_path = self.assets.frame_path(task_id, index);
+                let duration = 3.0f64;
+                self.ffmpeg
+                    .create_still_segment(&frame_path, &segment_path, duration)
+                    .await?;
+            }
             let segment = asset_for_path(
                 task_id,
                 run_id,
@@ -1059,13 +1543,31 @@ impl PipelineRunner {
         task_id: &str,
         run_id: &str,
         app: &AppHandle,
-        source_video: &std::path::Path,
+        source_video: Option<&std::path::Path>,
     ) -> AppResult<()> {
+        if self.assets.narration_path(task_id).exists() {
+            let task = self
+                .repo
+                .get_task(task_id)
+                .await?
+                .ok_or_else(|| AppError::Workflow(format!("task not found: {task_id}")))?;
+            let scene_count = scene_count_from_config(&task.config_json, task.task_type);
+            return self
+                .real_render_stage(task_id, run_id, app, &task, scene_count)
+                .await;
+        }
+
         self.begin_stage(run_id, &StageType::FinalRender, app).await?;
         self.log(task_id, run_id, app, "info", "Rendering final video (mock)")
             .await?;
         let final_path = self.assets.final_path(task_id);
-        self.assets.copy_file(source_video, &final_path).await?;
+        if let Some(source_video) = source_video {
+            self.assets.copy_file(source_video, &final_path).await?;
+        } else {
+            return Err(AppError::Workflow(
+                "mock render requires source video or TTS narration".into(),
+            ));
+        }
         let final_video = asset_for_path(
             task_id,
             run_id,
@@ -1085,7 +1587,19 @@ impl PipelineRunner {
         stage: &StageType,
         app: &AppHandle,
     ) -> AppResult<()> {
-        self.repo.start_stage(run_id, stage.clone()).await?;
+        let task_id = self.repo.run_task_id(run_id).await?;
+        let task = self
+            .repo
+            .get_task(&task_id)
+            .await?
+            .ok_or_else(|| AppError::Workflow(format!("task not found: {task_id}")))?;
+        let order_index = ordered_stages(task.task_type)
+            .iter()
+            .position(|value| value == stage)
+            .unwrap_or(0) as i32;
+        self.repo
+            .start_stage(run_id, stage.clone(), order_index)
+            .await?;
         emit_pipeline_event(
             app,
             PipelineEvent::Stage {
@@ -1229,12 +1743,54 @@ async fn rewrite_outputs_ready(
     Ok(assets.subtitle_path(task_id).exists())
 }
 
-fn scene_count_from_config(config: &serde_json::Value) -> i32 {
+fn scene_count_from_config(config: &serde_json::Value, task_type: WorkflowTaskType) -> i32 {
+    if let Some(count) = config.get("sceneCount").and_then(|value| value.as_i64()) {
+        return count.clamp(1, 20) as i32;
+    }
+    if task_type == WorkflowTaskType::ImageToVideo {
+        let image_count = config
+            .get("imagePaths")
+            .and_then(|value| value.as_array())
+            .map(|items| items.len())
+            .unwrap_or(1);
+        return (image_count as i64).clamp(1, 20) as i32;
+    }
+    5
+}
+
+fn requirements_from_config(config: &serde_json::Value) -> AppResult<String> {
     config
-        .get("sceneCount")
-        .and_then(|value| value.as_i64())
-        .unwrap_or(5)
-        .clamp(1, 20) as i32
+        .get("requirements")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| AppError::Workflow("image_to_video task requires requirements".into()))
+}
+
+async fn script_planning_outputs_ready(
+    assets: &AssetManager,
+    task_id: &str,
+    scene_count: i32,
+) -> AppResult<bool> {
+    for index in 0..scene_count {
+        if !assets.frame_path(task_id, index).exists() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn tts_outputs_ready(assets: &AssetManager, task_id: &str, scene_count: i32) -> bool {
+    if !assets.narration_path(task_id).exists() {
+        return false;
+    }
+    for index in 0..scene_count {
+        if !assets.tts_segment_path(task_id, index).exists() {
+            return false;
+        }
+    }
+    true
 }
 
 fn should_correct_subtitles(config: &serde_json::Value) -> bool {
@@ -1266,6 +1822,17 @@ fn scene_storyboard_prompt(scene: &Scene) -> String {
         .to_string()
 }
 
+fn scene_seedance_job_id(scene: &Scene) -> Option<String> {
+    scene
+        .metadata_json
+        .as_ref()
+        .and_then(|value| value.get("seedanceJobId"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 fn scene_keyframe_path(
     scene: &Scene,
     task_id: &str,
@@ -1283,10 +1850,27 @@ fn scene_keyframe_path(
             return Ok(keyframe);
         }
     }
-    Ok(assets.keyframe_path(task_id, scene.scene_index))
+    let expected = assets.keyframe_path(task_id, scene.scene_index);
+    if expected.exists() {
+        return Ok(expected);
+    }
+    Err(AppError::Workflow(format!(
+        "keyframe image missing for scene {}: {}",
+        scene.scene_index,
+        expected.display()
+    )))
 }
 
 fn scene_duration_secs(scene: &Scene) -> f64 {
+    if let Some(duration_ms) = scene
+        .metadata_json
+        .as_ref()
+        .and_then(|metadata| metadata.get("ttsDurationMs"))
+        .and_then(|value| value.as_i64())
+        .filter(|value| *value > 0)
+    {
+        return (duration_ms as f64 / 1000.0).clamp(3.0, 10.0);
+    }
     scene
         .metadata_json
         .as_ref()

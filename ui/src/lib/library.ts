@@ -26,7 +26,9 @@ export type LibraryAsset = {
 
 const ASSET_TYPE_MAP: Record<string, string> = {
   source_video: "SOURCE_VIDEO",
+  source_image: "STORYBOARD_FRAME",
   audio: "AUDIO_TRACK",
+  tts_segment: "AUDIO_TRACK",
   keyframe: "STORYBOARD_FRAME",
   generated_frame: "STORYBOARD_FRAME",
   video_segment: "VIDEO_SEGMENT",
@@ -60,9 +62,28 @@ export function toLibraryAsset(asset: Asset, taskTitle: string): LibraryAsset {
 }
 
 export function toLibraryAssets(assets: Asset[], taskTitles: Record<string, string>) {
-  return assets.map((asset) =>
-    toLibraryAsset(asset, taskTitles[asset.task_id] ?? asset.task_id)
-  );
+  return assets
+    .map((asset) => toLibraryAsset(asset, taskTitles[asset.task_id] ?? asset.task_id))
+    .sort(compareLibraryAssets);
+}
+
+function compareLibraryAssets(left: LibraryAsset, right: LibraryAsset) {
+  const leftRank = assetSortRank(left);
+  const rightRank = assetSortRank(right);
+  if (leftRank !== rightRank) return leftRank - rightRank;
+  const leftScene = left.sceneIndex ?? Number.MAX_SAFE_INTEGER;
+  const rightScene = right.sceneIndex ?? Number.MAX_SAFE_INTEGER;
+  if (leftScene !== rightScene) return leftScene - rightScene;
+  return left.storageKey.localeCompare(right.storageKey);
+}
+
+function assetSortRank(asset: LibraryAsset) {
+  if (asset.type === "FINAL_VIDEO") return 0;
+  if (asset.type === "VIDEO_SEGMENT") return 1;
+  if (asset.type === "SOURCE_VIDEO") return 2;
+  if (asset.type === "STORYBOARD_FRAME") return 3;
+  if (asset.type === "AUDIO_TRACK") return 4;
+  return 5;
 }
 
 export function filterLibraryAssets(assets: LibraryAsset[], filter: AssetFilterKey) {

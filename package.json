@@ -7,15 +7,15 @@
   "scripts": {
     "dev": "tauri dev",
     "fetch-tools": "powershell -ExecutionPolicy Bypass -File scripts/fetch-tools.ps1",
-    "build": "npm run fetch-tools && tauri build",
-    "build:win": "npm run fetch-tools && tauri build --target x86_64-pc-windows-msvc",
+    "build": "bun run fetch-tools && tauri build",
+    "build:win": "bun run fetch-tools && tauri build --target x86_64-pc-windows-msvc",
     "ui:dev": "vite --host 127.0.0.1",
     "ui:build": "vite build",
     "ui:check": "tsc --noEmit",
-    "rust:check": "npm run fetch-tools && cargo check --manifest-path src-tauri/Cargo.toml",
-    "rust:test": "npm run fetch-tools && cargo test --manifest-path src-tauri/Cargo.toml",
-    "test": "npm run ui:check && npm run rust:test",
-    "check": "npm run ui:check && npm run rust:check && npm run rust:test"
+    "rust:check": "bun run fetch-tools && cargo check --manifest-path src-tauri/Cargo.toml",
+    "rust:test": "bun run fetch-tools && cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "bun run ui:check && bun run rust:test",
+    "check": "bun run ui:check && bun run rust:check && bun run rust:test"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.13",

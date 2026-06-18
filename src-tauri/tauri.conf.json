@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "local.repix.desktop",
   "build": {
-    "beforeDevCommand": "npm run ui:dev",
-    "beforeBuildCommand": "npm run ui:build",
+    "beforeDevCommand": "bun run ui:dev",
+    "beforeBuildCommand": "bun run ui:build",
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../dist"
   },

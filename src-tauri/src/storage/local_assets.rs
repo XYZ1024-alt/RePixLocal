@@ -31,6 +31,35 @@ impl AssetManager {
         &self.workspace
     }
 
+    pub async fn import_source_images(
+        &self,
+        task_id: &str,
+        image_paths: &[String],
+    ) -> AppResult<Vec<Asset>> {
+        if image_paths.is_empty() {
+            return Err(AppError::Workflow(
+                "image_to_video task requires at least one image".into(),
+            ));
+        }
+        self.workspace.create_task_layout(task_id).await?;
+        let mut assets = Vec::with_capacity(image_paths.len());
+        for (index, image_path) in image_paths.iter().enumerate() {
+            let source = PathBuf::from(image_path);
+            validate_readable_file(&source).await?;
+            let target = self.source_image_path(task_id, index as i32);
+            self.copy_file(&source, &target).await?;
+            assets.push(new_asset(
+                task_id,
+                None,
+                AssetType::SourceImage,
+                target,
+                Some("image/png".to_string()),
+                Some(index as i32),
+            ));
+        }
+        Ok(assets)
+    }
+
     pub async fn import_source_video(&self, task_id: &str, source_path: &str) -> AppResult<Asset> {
         let source = PathBuf::from(source_path);
         validate_readable_file(&source).await?;
@@ -54,11 +83,33 @@ impl AssetManager {
             .join("audio.wav")
     }
 
+    pub fn narration_path(&self, task_id: &str) -> PathBuf {
+        self.workspace
+            .task_dir(task_id)
+            .join("audio")
+            .join("narration.wav")
+    }
+
+    pub fn tts_segment_path(&self, task_id: &str, index: i32) -> PathBuf {
+        self.workspace
+            .task_dir(task_id)
+            .join("tts")
+            .join(format!("scene_{index}.wav"))
+    }
+
+    pub fn source_image_path(&self, task_id: &str, index: i32) -> PathBuf {
+        self.workspace
+            .task_dir(task_id)
+            .join("source")
+            .join("images")
+            .join(format!("image_{index}.png"))
+    }
+
     pub fn keyframe_path(&self, task_id: &str, index: i32) -> PathBuf {
         self.workspace
             .task_dir(task_id)
             .join("keyframes")
-            .join(format!("frame_{index}.png"))
+            .join(format!("frame_{:03}.png", index + 1))
     }
 
     pub fn frame_path(&self, task_id: &str, index: i32) -> PathBuf {

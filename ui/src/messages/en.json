@@ -71,6 +71,9 @@
     "stages": "Stages",
     "liveLog": "Real-time Logs",
     "assetsTitle": "Task Assets",
+    "finalOutputTitle": "Final output",
+    "finalOutputHint": "Run completed. The final video is in the Final output section below, or open it directly in File Explorer.",
+    "openInFolder": "Open in folder",
     "assetsEmpty": "No assets for this task yet.",
     "assetSigningError": "Asset preview signing failed",
     "costsTitle": "Run Cost",
@@ -109,9 +112,10 @@
   "assets": {
     "viewAll": "View All ({count})",
     "sections": {
+      "final": "Final output",
       "images": "Images (Storyboard Frames)",
       "audio": "Audio (TTS & BGM)",
-      "videos": "Videos (Final MP4)",
+      "videos": "Segments and source video",
       "documents": "Documents"
     },
     "types": {
@@ -126,8 +130,20 @@
     }
   },
   "wizard": {
-    "title": "Create New Replication Task",
-    "description": "Configure your AI video replication pipeline",
+    "title": "Create New Task",
+    "description": "Configure video replication or image-to-video pipeline",
+    "taskMode": "Task mode",
+    "sourceImages": "Reference images",
+    "pickImages": "Choose images",
+    "pickImagesDesc": "PNG / JPG / WebP, up to 20 images; order defines scene order",
+    "requirements": "Creative brief",
+    "requirementsPlaceholder": "e.g. 30s product pitch, casual tone, highlight portability and battery life",
+    "selectImagesFirst": "Select at least one image first.",
+    "requirementsRequired": "Enter a creative brief.",
+    "unsupportedImageType": "Unsupported image format. Use PNG, JPG, or WebP.",
+    "imageTooLarge": "Each image must be 20MB or smaller.",
+    "tooManyImages": "You can select at most {count} images.",
+    "sceneLabel": "Scene {index}",
     "sourceVideo": "Source Video",
     "sourceVideoDesc": "MP4 or MOV up to 500MB. Transcript and audio are extracted locally with faster-whisper.",
     "dragDrop": "Drag & drop your video here",
@@ -205,6 +221,14 @@
         "bottom": "Bottom",
         "center": "Center",
         "top": "Top"
+      },
+      "taskType": {
+        "replicate": "Video replication",
+        "image_to_video": "Image to video"
+      },
+      "taskTypeDesc": {
+        "replicate": "Upload a source video; AI replicates visuals with TTS narration",
+        "image_to_video": "Upload images and a brief; AI generates narration and video"
       }
     },
     "errors": {
@@ -222,7 +246,9 @@
   "stages": {
     "TRANSCRIPT_EXTRACTION": "Transcript & Audio",
     "SCRIPT_REWRITE": "Keyframe Analysis & Script Rewrite",
+    "SCRIPT_PLANNING": "Image Analysis & Script Planning",
     "STORYBOARD_GENERATION": "Tongyi Storyboard Frames",
+    "TTS_SYNTHESIS": "CosyVoice TTS Synthesis",
     "SEGMENT_GENERATION": "Seedance Video Segments",
     "FINAL_RENDER": "FFmpeg Final Render"
   },
@@ -275,11 +301,20 @@
     "fetchModelsToSelect": "Please click 'Fetch Available Models' first",
     "mustFetchModels": "Please fetch the model list first, then select a model from the list",
     "advancedOptions": "Advanced Options",
+    "dashscope": {
+      "title": "DashScope (Bailian)",
+      "description": "One API key for Qwen-VL analysis, Tongyi Wanxiang storyboards, and CosyVoice TTS",
+      "modelsHeading": "Model selection",
+      "qwenVlModel": "Qwen-VL model",
+      "tongyiModel": "Tongyi Wanxiang model",
+      "cosyvoiceModel": "CosyVoice model",
+      "allModelsRequired": "Select a model for each of the three services",
+      "keysMismatch": "Saved keys differ across services. Save again to unify them.",
+      "baseUrlHint": "Defaults to the Beijing API endpoint shared by all three services"
+    },
     "providerDesc": {
       "DEEPSEEK": "Script rewriting with chat completions",
-      "QWEN_VL": "Visual analysis of source video keyframes",
-      "TONGYI": "Image-to-image generation for similar frames",
-      "SEEDANCE": "Video segment generation from images"
+      "SEEDANCE": "Video segment generation from images (Volcengine Ark)"
     },
     "system": {
       "configuration": "System Configuration",

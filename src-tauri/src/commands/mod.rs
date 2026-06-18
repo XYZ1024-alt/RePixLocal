@@ -4,10 +4,11 @@ use crate::config::{save, AppConfig};
 use crate::errors::command_error;
 use crate::media::whisper_models;
 use crate::models::{
-    AppLog, Asset, CostSummary, CreateTaskInput, DashboardData, DashboardSummary, PickedVideoFile,
-    PipelineRun, PipelineStage, ProviderCredentialInput, ProviderCredentialView,
-    ProviderModelOption, RunDetail, RunListItem, SubmitTaskResponse, Task, ToolCheck,
-    WhisperModelStatus,
+    AppLog, Asset, CostSummary, CreateTaskInput, DashboardData, DashboardSummary, PickedImageFile,
+    PickedVideoFile,
+    DashscopeCredentialInput, DashscopeCredentialView, PipelineRun, PipelineStage,
+    ProviderCredentialInput, ProviderCredentialView, ProviderModelOption, RunDetail, RunListItem,
+    SubmitTaskResponse, Task, ToolCheck, WhisperModelStatus,
 };
 use crate::providers::{model_catalog, validate_provider_config, ProviderConfig};
 use crate::state::AppState;
@@ -127,6 +128,22 @@ pub async fn list_assets(
         .list_assets(&task_id)
         .await
         .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn reveal_asset(path: String) -> Result<(), String> {
+    let path = std::path::PathBuf::from(path);
+    if !path.exists() {
+        return Err(command_error(crate::errors::AppError::Workflow(format!(
+            "file not found: {}",
+            path.display()
+        ))));
+    }
+    std::process::Command::new("explorer")
+        .arg(format!("/select,{}", path.display()))
+        .spawn()
+        .map_err(|error| command_error(crate::errors::AppError::Workflow(error.to_string())))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -312,6 +329,29 @@ pub async fn list_provider_credentials(
 }
 
 #[tauri::command]
+pub async fn list_dashscope_credentials(
+    state: State<'_, AppState>,
+) -> Result<DashscopeCredentialView, String> {
+    state
+        .repo
+        .list_dashscope_credentials()
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn save_dashscope_credential(
+    input: DashscopeCredentialInput,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .repo
+        .save_dashscope_credential(input)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
 pub async fn list_provider_models(
     provider: String,
     state: State<'_, AppState>,
@@ -333,6 +373,30 @@ pub async fn list_provider_models(
 #[tauri::command]
 pub async fn test_provider(config: ProviderConfig) -> Result<(), String> {
     validate_provider_config(&config).map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn pick_image_files() -> Result<Vec<PickedImageFile>, String> {
+    let picked = rfd::AsyncFileDialog::new()
+        .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
+        .pick_files()
+        .await;
+    let Some(files) = picked else {
+        return Ok(Vec::new());
+    };
+    let mut results = Vec::with_capacity(files.len());
+    for file in files {
+        let path = file.path().to_path_buf();
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .map_err(|error| command_error(crate::errors::AppError::Filesystem(error)))?;
+        results.push(PickedImageFile {
+            path: path.to_string_lossy().to_string(),
+            name: file.file_name(),
+            size_bytes: metadata.len(),
+        });
+    }
+    Ok(results)
 }
 
 #[tauri::command]
