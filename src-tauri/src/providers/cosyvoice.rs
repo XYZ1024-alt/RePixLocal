@@ -51,8 +51,7 @@ impl CosyVoiceClient {
             "model": model,
             "input": input,
         });
-        let base_url = settings.base_url.trim().trim_end_matches('/');
-        let url = format!("{base_url}/api/v1/services/audio/tts/SpeechSynthesizer");
+        let url = cosyvoice_synthesizer_url(&settings.base_url);
         let client = build_http_client(120)?;
         let response = client
             .post(&url)
@@ -87,10 +86,20 @@ impl CosyVoiceClient {
 }
 
 pub fn map_voice_id(voice_key: &str) -> &'static str {
+    // cosyvoice-v3-flash uses v3 system voices (see CosyVoice voice list).
     match voice_key {
         "male-1" => "longanyang",
-        "narrator" => "longjing_v2",
-        _ => "longxiaochun_v2",
+        "narrator" => "longsanshu_v3",
+        _ => "longwan_v3",
+    }
+}
+
+fn cosyvoice_synthesizer_url(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.ends_with("/api/v1") {
+        format!("{trimmed}/services/audio/tts/SpeechSynthesizer")
+    } else {
+        format!("{trimmed}/api/v1/services/audio/tts/SpeechSynthesizer")
     }
 }
 
@@ -108,8 +117,20 @@ mod tests {
 
     #[test]
     fn voice_mapping() {
-        assert_eq!(map_voice_id("female-1"), "longxiaochun_v2");
+        assert_eq!(map_voice_id("female-1"), "longwan_v3");
         assert_eq!(map_voice_id("male-1"), "longanyang");
-        assert_eq!(map_voice_id("narrator"), "longjing_v2");
+        assert_eq!(map_voice_id("narrator"), "longsanshu_v3");
+    }
+
+    #[test]
+    fn synthesizer_url_appends_service_path_once() {
+        assert_eq!(
+            cosyvoice_synthesizer_url("https://dashscope.aliyuncs.com/api/v1"),
+            "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer"
+        );
+        assert_eq!(
+            cosyvoice_synthesizer_url("https://dashscope.aliyuncs.com"),
+            "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer"
+        );
     }
 }
