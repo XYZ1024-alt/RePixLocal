@@ -2,12 +2,8 @@ use std::path::{Path, PathBuf};
 
 use crate::errors::{AppError, AppResult};
 
-const WHISPER_RUNTIME_DLLS: [&str; 4] = [
-    "ggml.dll",
-    "ggml-base.dll",
-    "ggml-cpu.dll",
-    "whisper.dll",
-];
+const WHISPER_RUNTIME_DLLS: [&str; 4] =
+    ["ggml.dll", "ggml-base.dll", "ggml-cpu.dll", "whisper.dll"];
 
 pub fn sync_whisper_runtime_near_exe() -> AppResult<()> {
     #[cfg(not(windows))]

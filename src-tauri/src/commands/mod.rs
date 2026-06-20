@@ -4,11 +4,11 @@ use crate::config::{save, AppConfig};
 use crate::errors::command_error;
 use crate::media::whisper_models;
 use crate::models::{
-    AppLog, Asset, CostSummary, CreateTaskInput, DashboardData, DashboardSummary, PickedImageFile,
-    PickedVideoFile,
-    DashscopeCredentialInput, DashscopeCredentialView, PipelineRun, PipelineStage,
-    ProviderCredentialInput, ProviderCredentialView, ProviderModelOption, RunDetail, RunListItem,
-    SubmitTaskResponse, Task, ToolCheck, WhisperModelStatus,
+    AppLog, Asset, CostSummary, CreateTaskInput, DashboardData, DashboardSummary,
+    DashscopeCredentialInput, DashscopeCredentialView, PickedImageFile, PickedVideoFile,
+    PipelineRun, PipelineStage, ProviderCredentialInput, ProviderCredentialView,
+    ProviderModelOption, RunDetail, RunListItem, SubmitTaskResponse, Task, ToolCheck,
+    WhisperModelStatus,
 };
 use crate::providers::{model_catalog, validate_provider_config, ProviderConfig};
 use crate::state::AppState;
@@ -62,7 +62,10 @@ pub async fn list_runs(
 }
 
 #[tauri::command]
-pub async fn get_run(run_id: String, state: State<'_, AppState>) -> Result<Option<RunDetail>, String> {
+pub async fn get_run(
+    run_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<RunDetail>, String> {
     state.repo.get_run(&run_id).await.map_err(command_error)
 }
 
@@ -180,7 +183,10 @@ pub async fn check_ffmpeg(state: State<'_, AppState>) -> Result<Vec<ToolCheck>, 
     let (model_name, model_dir) = {
         let config = state.config.read().await;
         (
-            config.asr_model.clone().unwrap_or_else(|| "base".to_string()),
+            config
+                .asr_model
+                .clone()
+                .unwrap_or_else(|| "base".to_string()),
             config.whisper_model_dir.clone(),
         )
     };
@@ -242,11 +248,8 @@ async fn whisper_model_status_internal(
     model_name: &str,
 ) -> Result<WhisperModelStatus, String> {
     let model_dir = state.config.read().await.whisper_model_dir.clone();
-    let mut status = whisper_models::model_status(
-        &state.workspace,
-        model_dir.as_deref(),
-        model_name,
-    );
+    let mut status =
+        whisper_models::model_status(&state.workspace, model_dir.as_deref(), model_name);
     let download = whisper_models::get_download_state().await;
     status.downloading = download.downloading && download.model_name == model_name;
     status.bytes_done = download.bytes_done;

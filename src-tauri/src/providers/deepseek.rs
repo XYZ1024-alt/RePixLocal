@@ -4,8 +4,8 @@ use serde_json::{json, Value};
 
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
-use crate::providers::http_client::{build_http_client, format_http_error};
 use crate::models::{RewrittenScene, TranscriptSegment};
+use crate::providers::http_client::{build_http_client, format_http_error};
 use crate::providers::json_util::parse_json_payload;
 
 const SYSTEM_PROMPT_WITH_VISUALS: &str = r#"You are a video director creating a replicated video that maintains visual similarity to the source.

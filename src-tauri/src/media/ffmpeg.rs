@@ -26,12 +26,7 @@ impl FfmpegRunner {
     pub async fn check_tools(&self) -> Vec<ToolCheck> {
         let config = self.config.read().await;
         vec![
-            tool_check(
-                "ffmpeg",
-                "ffmpeg",
-                config.ffmpeg_path.as_deref(),
-                "ffmpeg",
-            ),
+            tool_check("ffmpeg", "ffmpeg", config.ffmpeg_path.as_deref(), "ffmpeg"),
             tool_check(
                 "ffprobe",
                 "ffprobe",
@@ -71,7 +66,9 @@ impl FfmpegRunner {
 
     pub async fn concat_audio(&self, audio_paths: &[PathBuf], out_path: &Path) -> AppResult<()> {
         if audio_paths.is_empty() {
-            return Err(AppError::Workflow("no audio segments to concatenate".into()));
+            return Err(AppError::Workflow(
+                "no audio segments to concatenate".into(),
+            ));
         }
         if audio_paths.len() == 1 {
             return self.convert_to_wav(&audio_paths[0], out_path).await;
@@ -190,7 +187,11 @@ impl FfmpegRunner {
         Err(AppError::Workflow("ffmpeg still segment failed".into()))
     }
 
-    pub async fn concat_segments(&self, segment_paths: &[PathBuf], out_path: &Path) -> AppResult<()> {
+    pub async fn concat_segments(
+        &self,
+        segment_paths: &[PathBuf],
+        out_path: &Path,
+    ) -> AppResult<()> {
         if segment_paths.is_empty() {
             return Err(AppError::Workflow("no segments to concatenate".into()));
         }
@@ -342,7 +343,9 @@ impl FfmpegRunner {
         if status.success() {
             return Ok(());
         }
-        Err(AppError::Workflow("ffmpeg keyframe extraction failed".into()))
+        Err(AppError::Workflow(
+            "ffmpeg keyframe extraction failed".into(),
+        ))
     }
 
     pub async fn render_final(
@@ -368,11 +371,17 @@ impl FfmpegRunner {
             let audio_duration = self.probe_duration(audio).await?;
             let pad = audio_duration - video_duration;
             if pad > 0.0 {
-                vf_parts.push(format!("tpad=stop_mode=clone:stop_duration={:.3}", pad + 0.5));
+                vf_parts.push(format!(
+                    "tpad=stop_mode=clone:stop_duration={:.3}",
+                    pad + 0.5
+                ));
             }
         }
         if let Some(ass_path) = subtitle_ass {
-            vf_parts.push(format!("subtitles='{}'", escape_subtitles_filter_path(ass_path)));
+            vf_parts.push(format!(
+                "subtitles='{}'",
+                escape_subtitles_filter_path(ass_path)
+            ));
         }
 
         if !vf_parts.is_empty() {
@@ -415,7 +424,14 @@ impl FfmpegRunner {
     pub async fn copy_stream(&self, input: &Path, output: &Path) -> AppResult<()> {
         let ffmpeg = self.ffmpeg_path().await?;
         let status = Command::new(&ffmpeg)
-            .args(["-y", "-i", &path_arg(input), "-c", "copy", &path_arg(output)])
+            .args([
+                "-y",
+                "-i",
+                &path_arg(input),
+                "-c",
+                "copy",
+                &path_arg(output),
+            ])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -448,7 +464,9 @@ fn path_arg(path: &Path) -> String {
 }
 
 fn escape_subtitles_filter_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/").replace(':', "\\:")
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .replace(':', "\\:")
 }
 
 fn tool_check(

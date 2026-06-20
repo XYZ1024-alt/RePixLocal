@@ -1,8 +1,8 @@
 use serde_json::Value;
 
 use crate::errors::{AppError, AppResult};
-use crate::providers::http_client::{build_http_client, format_http_error};
 use crate::models::{ProviderListingCredentials, ProviderModelOption};
+use crate::providers::http_client::{build_http_client, format_http_error};
 
 const DASHSCOPE_MODELS_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1/models";
 const SEEDANCE_MODEL_MARKER: &str = "seedance";
@@ -39,15 +39,13 @@ pub async fn fetch_models(
 ) -> AppResult<Vec<ProviderModelOption>> {
     match provider.to_uppercase().as_str() {
         "DEEPSEEK" => fetch_deepseek_models(creds).await,
-        "QWEN_VL" => {
-            fetch_dashscope_models(creds, &["vl", "vision"], "Qwen-VL").await
-        }
-        "TONGYI" => {
-            fetch_dashscope_models(creds, &["wanx", "wan"], "Tongyi image").await
-        }
+        "QWEN_VL" => fetch_dashscope_models(creds, &["vl", "vision"], "Qwen-VL").await,
+        "TONGYI" => fetch_dashscope_models(creds, &["wanx", "wan"], "Tongyi image").await,
         "SEEDANCE" => fetch_seedance_models(creds).await,
         "COSYVOICE" => Ok(mock_models("COSYVOICE")),
-        _ => Err(AppError::Provider(format!("unsupported provider: {provider}"))),
+        _ => Err(AppError::Provider(format!(
+            "unsupported provider: {provider}"
+        ))),
     }
 }
 
@@ -102,10 +100,7 @@ pub fn parse_seedance_models_response(value: &Value) -> AppResult<Vec<ProviderMo
         .iter()
         .filter_map(|entry| {
             let id = entry.get("id")?.as_str()?;
-            let name = entry
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or(id);
+            let name = entry.get("name").and_then(Value::as_str).unwrap_or(id);
             if is_seedance_model(id, name) {
                 Some(model_option(id, name))
             } else {
@@ -121,7 +116,9 @@ pub fn parse_seedance_models_response(value: &Value) -> AppResult<Vec<ProviderMo
     Ok(models)
 }
 
-async fn fetch_deepseek_models(creds: &ProviderListingCredentials) -> AppResult<Vec<ProviderModelOption>> {
+async fn fetch_deepseek_models(
+    creds: &ProviderListingCredentials,
+) -> AppResult<Vec<ProviderModelOption>> {
     let base_url = ensure_v1_base_url(&creds.base_url);
     let url = format!("{base_url}/models");
     let value = get_models_json(&url, &creds.api_key).await?;
@@ -144,7 +141,9 @@ async fn fetch_dashscope_models(
     Ok(filtered)
 }
 
-async fn fetch_seedance_models(creds: &ProviderListingCredentials) -> AppResult<Vec<ProviderModelOption>> {
+async fn fetch_seedance_models(
+    creds: &ProviderListingCredentials,
+) -> AppResult<Vec<ProviderModelOption>> {
     let base_url = creds.base_url.trim().trim_end_matches('/');
     let url = format!("{base_url}/models");
     let value = get_models_json(&url, &creds.api_key).await?;

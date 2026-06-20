@@ -7,8 +7,7 @@ use crate::errors::{AppError, AppResult};
 use crate::providers::http_client::{build_http_client, format_http_error};
 use crate::workspace::Workspace;
 
-const HF_MODEL_BASE: &str =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+const HF_MODEL_BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
 #[derive(Debug, Clone, Default)]
 pub struct DownloadState {
@@ -19,8 +18,7 @@ pub struct DownloadState {
     pub error: Option<String>,
 }
 
-static DOWNLOAD_STATE: std::sync::OnceLock<Arc<RwLock<DownloadState>>> =
-    std::sync::OnceLock::new();
+static DOWNLOAD_STATE: std::sync::OnceLock<Arc<RwLock<DownloadState>>> = std::sync::OnceLock::new();
 
 fn download_state() -> Arc<RwLock<DownloadState>> {
     DOWNLOAD_STATE
@@ -153,10 +151,14 @@ async fn download_model(target: &Path, model_name: &str) -> AppResult<PathBuf> {
     }
     tokio::fs::write(&temp_path, &bytes).await?;
 
-    tokio::fs::rename(&temp_path, target).await.map_err(|error| {
-        let _ = std::fs::remove_file(&temp_path);
-        AppError::Tool(format!("failed to finalize whisper model download: {error}"))
-    })?;
+    tokio::fs::rename(&temp_path, target)
+        .await
+        .map_err(|error| {
+            let _ = std::fs::remove_file(&temp_path);
+            AppError::Tool(format!(
+                "failed to finalize whisper model download: {error}"
+            ))
+        })?;
     Ok(target.to_path_buf())
 }
 

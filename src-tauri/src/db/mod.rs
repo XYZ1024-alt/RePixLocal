@@ -8,13 +8,11 @@ use uuid::Uuid;
 use crate::errors::AppResult;
 use crate::models::{
     AppLog, Asset, AssetStatus, AssetType, CostSummary, CreateTaskInput, DashboardData,
-    DashboardStats, DashscopeCredentialInput, DashscopeCredentialView, ProviderCostSummary,
-    ProviderCredentialConfig, ProviderCredentialInput, ProviderCredentialView,
-    ProviderListingCredentials, ProviderSettings, QueueItem, RunDetail,
-    RunDetailLog, RunDetailStage,
-    RunListItem,
-    Scene, TrendPoint, UsageItem, DashboardSummary, PipelineRun, PipelineStage, RunStatus,
-    StageStatus, StageType, Task, TaskStatus, WorkflowTaskType,
+    DashboardStats, DashboardSummary, DashscopeCredentialInput, DashscopeCredentialView,
+    PipelineRun, PipelineStage, ProviderCostSummary, ProviderCredentialConfig,
+    ProviderCredentialInput, ProviderCredentialView, ProviderListingCredentials, ProviderSettings,
+    QueueItem, RunDetail, RunDetailLog, RunDetailStage, RunListItem, RunStatus, Scene, StageStatus,
+    StageType, Task, TaskStatus, TrendPoint, UsageItem, WorkflowTaskType,
 };
 use crate::secrets::{decrypt_secret, encrypt_secret, mask_secret};
 use crate::workspace::Workspace;
@@ -238,11 +236,13 @@ impl Repository {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| default_provider_base_url(provider).to_string());
         let model: Option<String> = row.try_get("model")?;
-        let model = model.filter(|value| !value.trim().is_empty()).ok_or_else(|| {
-            crate::errors::AppError::Provider(format!(
-                "{provider} model not configured. Please set it in Settings."
-            ))
-        })?;
+        let model = model
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                crate::errors::AppError::Provider(format!(
+                    "{provider} model not configured. Please set it in Settings."
+                ))
+            })?;
         Ok(ProviderSettings {
             api_key,
             base_url,
@@ -277,10 +277,7 @@ impl Repository {
             .try_get::<Option<String>, _>("base_url")?
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| default_provider_base_url(provider).to_string());
-        Ok(ProviderListingCredentials {
-            api_key,
-            base_url,
-        })
+        Ok(ProviderListingCredentials { api_key, base_url })
     }
 
     pub async fn list_dashscope_credentials(&self) -> AppResult<DashscopeCredentialView> {
@@ -318,9 +315,8 @@ impl Repository {
             .iter()
             .zip(decrypted_keys.iter())
             .find_map(|((_, row), decrypted)| {
-                row.as_ref().and_then(|_| {
-                    decrypted.as_ref().map(|value| mask_secret(value))
-                })
+                row.as_ref()
+                    .and_then(|_| decrypted.as_ref().map(|value| mask_secret(value)))
             })
             .unwrap_or_default();
 
@@ -455,9 +451,7 @@ impl Repository {
             .bind(run_id)
             .fetch_optional(&self.pool)
             .await?;
-        task_id.ok_or_else(|| {
-            crate::errors::AppError::Workflow(format!("run not found: {run_id}"))
-        })
+        task_id.ok_or_else(|| crate::errors::AppError::Workflow(format!("run not found: {run_id}")))
     }
 
     pub async fn latest_run(&self, task_id: &str) -> AppResult<Option<PipelineRun>> {
@@ -564,12 +558,10 @@ impl Repository {
     }
 
     pub async fn list_scenes(&self, run_id: &str) -> AppResult<Vec<Scene>> {
-        let rows = sqlx::query(
-            "SELECT * FROM scenes WHERE run_id = ? ORDER BY scene_index ASC",
-        )
-        .bind(run_id)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query("SELECT * FROM scenes WHERE run_id = ? ORDER BY scene_index ASC")
+            .bind(run_id)
+            .fetch_all(&self.pool)
+            .await?;
         rows.into_iter().map(row_to_scene).collect()
     }
 
@@ -580,7 +572,10 @@ impl Repository {
         .bind(task_id)
         .fetch_all(&self.pool)
         .await?;
-        let mut scenes = rows.into_iter().map(row_to_scene).collect::<AppResult<Vec<_>>>()?;
+        let mut scenes = rows
+            .into_iter()
+            .map(row_to_scene)
+            .collect::<AppResult<Vec<_>>>()?;
         if scenes.is_empty() {
             return Ok(scenes);
         }
@@ -644,13 +639,12 @@ impl Repository {
     }
 
     pub async fn has_task_asset(&self, task_id: &str, asset_type: AssetType) -> AppResult<bool> {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM assets WHERE task_id = ? AND asset_type = ?",
-        )
-        .bind(task_id)
-        .bind(asset_type_text(&asset_type))
-        .fetch_one(&self.pool)
-        .await?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM assets WHERE task_id = ? AND asset_type = ?")
+                .bind(task_id)
+                .bind(asset_type_text(&asset_type))
+                .fetch_one(&self.pool)
+                .await?;
         Ok(count > 0)
     }
 
@@ -690,13 +684,12 @@ impl Repository {
     }
 
     pub async fn list_run_logs(&self, run_id: &str, limit: i64) -> AppResult<Vec<AppLog>> {
-        let rows = sqlx::query(
-            "SELECT * FROM logs WHERE run_id = ? ORDER BY created_at ASC LIMIT ?",
-        )
-        .bind(run_id)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query("SELECT * FROM logs WHERE run_id = ? ORDER BY created_at ASC LIMIT ?")
+                .bind(run_id)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?;
         rows.into_iter().map(row_to_log).collect()
     }
 
@@ -766,19 +759,17 @@ impl Repository {
             .execute(&self.pool)
             .await?;
         } else {
-            sqlx::query(
-                "INSERT INTO provider_credentials VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(Uuid::new_v4().to_string())
-            .bind(provider)
-            .bind(input.label)
-            .bind(encrypted_key)
-            .bind(input.base_url)
-            .bind(input.model)
-            .bind(&now)
-            .bind(&now)
-            .execute(&self.pool)
-            .await?;
+            sqlx::query("INSERT INTO provider_credentials VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(Uuid::new_v4().to_string())
+                .bind(provider)
+                .bind(input.label)
+                .bind(encrypted_key)
+                .bind(input.base_url)
+                .bind(input.model)
+                .bind(&now)
+                .bind(&now)
+                .execute(&self.pool)
+                .await?;
         }
         Ok(())
     }
@@ -1010,12 +1001,7 @@ async fn run_pending_migrations(pool: &SqlitePool) -> AppResult<()> {
     Ok(())
 }
 
-async fn ensure_column(
-    pool: &SqlitePool,
-    table: &str,
-    column: &str,
-    ddl: &str,
-) -> AppResult<()> {
+async fn ensure_column(pool: &SqlitePool, table: &str, column: &str, ddl: &str) -> AppResult<()> {
     let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
         .fetch_all(pool)
         .await?;

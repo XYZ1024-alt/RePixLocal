@@ -4,9 +4,8 @@ use crate::errors::{AppError, AppResult};
 
 pub fn parse_json_payload(content: &str) -> AppResult<Value> {
     let trimmed = strip_code_fence(content.trim());
-    serde_json::from_str(trimmed).map_err(|error| {
-        AppError::Provider(format!("provider returned invalid JSON: {error}"))
-    })
+    serde_json::from_str(trimmed)
+        .map_err(|error| AppError::Provider(format!("provider returned invalid JSON: {error}")))
 }
 
 fn strip_code_fence(content: &str) -> &str {
@@ -18,9 +17,7 @@ fn strip_code_fence(content: &str) -> &str {
         .or_else(|| rest.strip_prefix("JSON"))
         .unwrap_or(rest);
     let rest = rest.trim_start_matches('\n');
-    rest.strip_suffix("```")
-        .map(str::trim)
-        .unwrap_or(rest)
+    rest.strip_suffix("```").map(str::trim).unwrap_or(rest)
 }
 
 #[cfg(test)]
@@ -35,10 +32,7 @@ mod tests {
 
     #[test]
     fn parse_fenced_json_object() {
-        let value = parse_json_payload(
-            "```json\n{\"scenes\":[{\"index\":1}]}\n```",
-        )
-        .unwrap();
+        let value = parse_json_payload("```json\n{\"scenes\":[{\"index\":1}]}\n```").unwrap();
         assert!(value.get("scenes").and_then(|v| v.as_array()).is_some());
     }
 }

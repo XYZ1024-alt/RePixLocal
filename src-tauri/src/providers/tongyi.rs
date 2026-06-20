@@ -63,7 +63,8 @@ impl TongyiClient {
                 .await;
         }
         Err(AppError::Provider(
-            "Tongyi legacy models require a public image URL. Switch to a wan2.7-image model.".into(),
+            "Tongyi legacy models require a public image URL. Switch to a wan2.7-image model."
+                .into(),
         ))
     }
 

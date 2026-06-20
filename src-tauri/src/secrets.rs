@@ -50,7 +50,10 @@ pub fn decrypt_secret(encrypted: &str) -> AppResult<String> {
             "encryption key mismatch - re-enter API keys in Settings",
         ));
     }
-    Err(secret_error("decrypt", "no master encryption key available"))
+    Err(secret_error(
+        "decrypt",
+        "no master encryption key available",
+    ))
 }
 
 pub fn mask_secret(secret: &str) -> String {
@@ -72,8 +75,7 @@ pub fn mask_secret(secret: &str) -> String {
 
 pub fn encrypt_secret(secret: &str) -> AppResult<String> {
     let key = resolve_master_key_for_encrypt()?;
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|error| secret_error("encrypt", error))?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| secret_error("encrypt", error))?;
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ciphertext = cipher
         .encrypt(&nonce, secret.as_bytes())
@@ -248,7 +250,10 @@ fn create_master_key() -> AppResult<Vec<u8>> {
 
 fn master_key_path() -> AppResult<PathBuf> {
     let dirs = ProjectDirs::from("local", "RePix", "RePixLocal").ok_or_else(|| {
-        secret_error("resolve data dir", "cannot resolve application data directory")
+        secret_error(
+            "resolve data dir",
+            "cannot resolve application data directory",
+        )
     })?;
     Ok(dirs.data_dir().join(MASTER_KEY_FILE))
 }
@@ -284,19 +289,15 @@ mod tests {
         let key = [7u8; 32];
         let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-        let ciphertext = cipher.encrypt(&nonce, b"sk-provider-test".as_ref()).unwrap();
-        let encoded = format!(
-            "{}:{}",
-            STANDARD.encode(nonce),
-            STANDARD.encode(ciphertext)
-        );
+        let ciphertext = cipher
+            .encrypt(&nonce, b"sk-provider-test".as_ref())
+            .unwrap();
+        let encoded = format!("{}:{}", STANDARD.encode(nonce), STANDARD.encode(ciphertext));
         let (nonce_b64, ciphertext_b64) = encoded.split_once(':').unwrap();
         let nonce_bytes = STANDARD.decode(nonce_b64).unwrap();
         let ciphertext_bytes = STANDARD.decode(ciphertext_b64).unwrap();
         let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext_bytes.as_ref())
-            .unwrap();
+        let plaintext = cipher.decrypt(nonce, ciphertext_bytes.as_ref()).unwrap();
         assert_eq!(plaintext, b"sk-provider-test");
     }
 
@@ -308,9 +309,7 @@ mod tests {
         let alternate = [2u8; 32];
         let cipher = Aes256Gcm::new_from_slice(&alternate).unwrap();
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-        let ciphertext = cipher
-            .encrypt(&nonce, b"provider-secret".as_ref())
-            .unwrap();
+        let ciphertext = cipher.encrypt(&nonce, b"provider-secret".as_ref()).unwrap();
 
         assert!(matches!(
             try_decrypt_with_key(nonce.as_slice(), &ciphertext, &primary),

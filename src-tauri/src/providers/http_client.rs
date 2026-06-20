@@ -59,6 +59,8 @@ mod tests {
         assert!(is_transient_provider_error(
             "https://example.com: error sending request; connection failed; request timed out"
         ));
-        assert!(!is_transient_provider_error("Seedance poll error (401): unauthorized"));
+        assert!(!is_transient_provider_error(
+            "Seedance poll error (401): unauthorized"
+        ));
     }
 }

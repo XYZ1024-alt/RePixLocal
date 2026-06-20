@@ -3,9 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-
 use serde_json::{json, Value};
-
 
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
@@ -122,15 +120,16 @@ impl SeedanceClient {
             } else {
                 "Seedance poll error"
             };
-            return Err(AppError::Provider(format!(
-                "{label} ({status}): {body}"
-            )));
+            return Err(AppError::Provider(format!("{label} ({status}): {body}")));
         }
         let body: Value = response
             .json()
             .await
             .map_err(|error| AppError::Provider(error.to_string()))?;
-        let raw_status = body.get("status").and_then(Value::as_str).unwrap_or_default();
+        let raw_status = body
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let status = match raw_status {
             "queued" | "running" => SegmentPollStatus::Pending,
             "succeeded" => SegmentPollStatus::Ready,
@@ -174,9 +173,7 @@ impl SeedanceClient {
                     });
                 }
                 SegmentPollStatus::Failed => {
-                    return Err(AppError::Provider(format!(
-                        "Seedance job {job_id} failed"
-                    )));
+                    return Err(AppError::Provider(format!("Seedance job {job_id} failed")));
                 }
                 SegmentPollStatus::Pending => {
                     if tokio::time::Instant::now() > deadline {
@@ -232,9 +229,8 @@ where
             Err(error) => return Err(error),
         }
     }
-    Err(last_error.unwrap_or_else(|| {
-        AppError::Provider("Seedance request failed after retries".into())
-    }))
+    Err(last_error
+        .unwrap_or_else(|| AppError::Provider("Seedance request failed after retries".into())))
 }
 
 #[cfg(test)]

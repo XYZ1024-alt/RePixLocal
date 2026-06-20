@@ -61,21 +61,15 @@ pub async fn read_segments_from_json(path: &Path) -> AppResult<Vec<TranscriptSeg
 }
 
 pub fn segments_from_json(value: &Value) -> AppResult<Vec<TranscriptSegment>> {
-    let items = value.as_array().ok_or_else(|| {
-        AppError::Workflow("subtitle JSON must be an array of segments".into())
-    })?;
+    let items = value
+        .as_array()
+        .ok_or_else(|| AppError::Workflow("subtitle JSON must be an array of segments".into()))?;
     items
         .iter()
         .map(|item| {
             Ok(TranscriptSegment {
-                start_ms: item
-                    .get("startMs")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0),
-                end_ms: item
-                    .get("endMs")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0),
+                start_ms: item.get("startMs").and_then(Value::as_i64).unwrap_or(0),
+                end_ms: item.get("endMs").and_then(Value::as_i64).unwrap_or(0),
                 text: item
                     .get("text")
                     .and_then(Value::as_str)
@@ -240,9 +234,7 @@ fn play_resolution(style: &AssStyle) -> (i32, i32) {
         (("9:16", "1080p"), (1080, 1920)),
         (("9:16", "720p"), (720, 1280)),
     ]);
-    *resolutions
-        .get(&key)
-        .unwrap_or(&(1920, 1080))
+    *resolutions.get(&key).unwrap_or(&(1920, 1080))
 }
 
 fn auto_font_size(play_res_y: i32) -> i32 {

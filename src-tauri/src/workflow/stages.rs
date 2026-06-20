@@ -48,9 +48,6 @@ mod tests {
 
     #[test]
     fn stage_event_names_are_upper_snake() {
-        assert_eq!(
-            stage_event_name(&StageType::TtsSynthesis),
-            "TTS_SYNTHESIS"
-        );
+        assert_eq!(stage_event_name(&StageType::TtsSynthesis), "TTS_SYNTHESIS");
     }
 }

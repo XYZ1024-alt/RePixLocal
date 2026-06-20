@@ -8,9 +8,7 @@ use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
 use crate::errors::{AppError, AppResult};
-use crate::media::bundled_tools::{
-    is_executable_file, resolve_tool_path_with_source, ToolSource,
-};
+use crate::media::bundled_tools::{is_executable_file, resolve_tool_path_with_source, ToolSource};
 use crate::media::whisper_models;
 use crate::media::whisper_runtime::{
     format_process_failure, whisper_runtime_ready, whisper_runtime_search_dir,
@@ -46,10 +44,7 @@ impl WhisperRunner {
         let model_name = config.asr_model.as_deref().unwrap_or("base");
         let binary = resolve_whisper_binary_with_source(config.whisper_bin.as_deref());
         let model_path = whisper_models::model_path_for_dir(
-            &whisper_models::resolve_model_dir(
-                workspace,
-                config.whisper_model_dir.as_deref(),
-            ),
+            &whisper_models::resolve_model_dir(workspace, config.whisper_model_dir.as_deref()),
             model_name,
         );
         let model_error = if model_path.exists() {
@@ -122,9 +117,8 @@ impl WhisperRunner {
     ) -> AppResult<TranscriptResult> {
         let model_path = self.ensure_model(workspace).await?;
         let config = self.config.read().await;
-        let binary = resolve_whisper_binary(config.whisper_bin.as_deref()).ok_or_else(|| {
-            AppError::Tool("whisper-cli is not configured or not found".into())
-        })?;
+        let binary = resolve_whisper_binary(config.whisper_bin.as_deref())
+            .ok_or_else(|| AppError::Tool("whisper-cli is not configured or not found".into()))?;
 
         if let Some(parent) = output_prefix.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -172,12 +166,14 @@ impl WhisperRunner {
             )));
         }
 
-        let body = tokio::fs::read_to_string(&json_path).await.map_err(|error| {
-            AppError::Tool(format!(
-                "whisper JSON output not found at {}: {error}",
-                json_path.display()
-            ))
-        })?;
+        let body = tokio::fs::read_to_string(&json_path)
+            .await
+            .map_err(|error| {
+                AppError::Tool(format!(
+                    "whisper JSON output not found at {}: {error}",
+                    json_path.display()
+                ))
+            })?;
         parse_whisper_json(&body)
     }
 }
@@ -186,12 +182,8 @@ fn resolve_whisper_binary(configured: Option<&str>) -> Option<PathBuf> {
     resolve_whisper_binary_with_source(configured).map(|(path, _)| path)
 }
 
-fn resolve_whisper_binary_with_source(
-    configured: Option<&str>,
-) -> Option<(PathBuf, ToolSource)> {
-    if let Some(result) =
-        resolve_tool_path_with_source(configured, "whisper-cli", "whisper-cli")
-    {
+fn resolve_whisper_binary_with_source(configured: Option<&str>) -> Option<(PathBuf, ToolSource)> {
+    if let Some(result) = resolve_tool_path_with_source(configured, "whisper-cli", "whisper-cli") {
         return Some(result);
     }
     WHISPER_PATH_CANDIDATES.iter().find_map(|name| {

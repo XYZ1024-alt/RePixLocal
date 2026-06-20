@@ -68,9 +68,7 @@ impl QwenVlClient {
                     ]
                 }
             });
-            let url = format!(
-                "{base_url}/services/aigc/multimodal-generation/generation"
-            );
+            let url = format!("{base_url}/services/aigc/multimodal-generation/generation");
             let response = client
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", settings.api_key))
@@ -113,7 +111,9 @@ fn extract_description(body: &Value, index: usize) -> AppResult<String> {
         .and_then(|choice| choice.pointer("/message/content"))
         .and_then(Value::as_array)
         .ok_or_else(|| {
-            AppError::Provider(format!("Qwen-VL returned invalid content for frame {index}"))
+            AppError::Provider(format!(
+                "Qwen-VL returned invalid content for frame {index}"
+            ))
         })?;
     let text = content
         .iter()

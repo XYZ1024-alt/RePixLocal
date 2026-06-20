@@ -48,7 +48,9 @@ pub async fn pad_keyframes_to_count(
     count: i32,
 ) -> AppResult<()> {
     if frame_paths.is_empty() {
-        return Err(AppError::Workflow("no keyframes extracted from source video".into()));
+        return Err(AppError::Workflow(
+            "no keyframes extracted from source video".into(),
+        ));
     }
     if frame_paths.len() < count as usize {
         tracing::info!(
@@ -114,9 +116,13 @@ mod tests {
     #[tokio::test]
     async fn pad_keyframes_duplicates_last_frame() {
         let dir = std::env::temp_dir().join(format!("repix-pad-test-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.expect("create temp dir");
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .expect("create temp dir");
         let frame_001 = dir.join("frame_001.png");
-        tokio::fs::write(&frame_001, b"png").await.expect("write frame");
+        tokio::fs::write(&frame_001, b"png")
+            .await
+            .expect("write frame");
 
         let mut frames = vec![frame_001.clone()];
         pad_keyframes_to_count(&mut frames, &dir, 3)

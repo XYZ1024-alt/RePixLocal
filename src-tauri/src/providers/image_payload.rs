@@ -22,10 +22,8 @@ mod tests {
 
     #[tokio::test]
     async fn image_data_url_prefixes_png_base64() {
-        let path = std::env::temp_dir().join(format!(
-            "repix-image-payload-{}.png",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("repix-image-payload-{}.png", std::process::id()));
         tokio::fs::write(&path, b"fake-png-bytes")
             .await
             .expect("write temp file");
