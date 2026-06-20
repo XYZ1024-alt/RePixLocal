@@ -267,32 +267,14 @@ async fn resolve_whisper_cli_available(state: &AppState) -> bool {
 
 #[tauri::command]
 pub async fn get_settings(state: State<'_, AppState>) -> Result<AppConfig, String> {
-    Ok(crate::storage::oss::sanitize_config_for_ui(
-        state.config.read().await.clone(),
-    ))
+    Ok(state.config.read().await.clone())
 }
 
 #[tauri::command]
 pub async fn update_settings(
-    mut input: AppConfig,
+    input: AppConfig,
     state: State<'_, AppState>,
 ) -> Result<AppConfig, String> {
-    let secret_empty = input
-        .s3_secret_key
-        .as_deref()
-        .map(str::trim)
-        .is_none_or(str::is_empty);
-    if secret_empty {
-        let from_memory = state.config.read().await.s3_secret_key_encrypted.clone();
-        input.s3_secret_key_encrypted = if from_memory.is_some() {
-            from_memory
-        } else {
-            crate::config::load_or_create(&state.workspace)
-                .await
-                .ok()
-                .and_then(|config| config.s3_secret_key_encrypted)
-        };
-    }
     let persisted = save(&state.workspace, &input)
         .await
         .map_err(command_error)?;
@@ -300,9 +282,7 @@ pub async fn update_settings(
         let mut config = state.config.write().await;
         *config = persisted;
     }
-    Ok(crate::storage::oss::sanitize_config_for_ui(
-        state.config.read().await.clone(),
-    ))
+    Ok(state.config.read().await.clone())
 }
 
 #[tauri::command]

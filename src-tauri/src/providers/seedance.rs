@@ -1,5 +1,4 @@
 use std::future::Future;
-use std::net::IpAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,7 +10,7 @@ use serde_json::{json, Value};
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
 use crate::providers::http_client::{format_http_error, is_transient_provider_error};
-use crate::storage::oss::OssClient;
+use crate::providers::image_payload::image_data_url;
 
 const SEGMENT_POLL_INTERVAL_SECS: u64 = 10;
 const SEGMENT_TIMEOUT_SECS: u64 = 1800;
@@ -44,14 +43,11 @@ impl SeedanceClient {
 
     pub async fn submit_segment(
         &self,
-        oss: &OssClient,
-        frame_key: &str,
         frame_path: &Path,
         duration_sec: f64,
         motion_prompt: Option<&str>,
     ) -> AppResult<String> {
-        oss.put_file(frame_key, frame_path, "image/png").await?;
-        let image_url = provider_readable_image_url(oss, frame_key).await?;
+        let image_url = image_data_url(frame_path).await?;
         let settings = self.repo.get_provider_settings("SEEDANCE").await?;
         let base_url = settings.base_url.trim_end_matches('/');
         let text = segment_text(duration_sec, motion_prompt);
@@ -195,65 +191,6 @@ impl SeedanceClient {
     }
 }
 
-async fn provider_readable_image_url(oss: &OssClient, frame_key: &str) -> AppResult<String> {
-    let url = oss.public_url(frame_key).await?;
-    validate_provider_readable_url(&url)?;
-    Ok(url)
-}
-
-fn validate_provider_readable_url(url: &str) -> AppResult<()> {
-    let host = extract_url_host(url).ok_or_else(|| {
-        AppError::Provider(format!("Seedance image URL is not an HTTP URL: {url}"))
-    })?;
-    if is_private_host(host) {
-        return Err(AppError::Provider(
-            "Seedance image URL points to local/private object storage. \
-             Configure s3_public_endpoint to a provider-readable bucket URL."
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
-fn extract_url_host(url: &str) -> Option<&str> {
-    let without_scheme = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
-    let host = without_scheme.split('/').next()?.split(':').next()?;
-    if host.is_empty() {
-        None
-    } else {
-        Some(host)
-    }
-}
-
-fn is_private_host(hostname: &str) -> bool {
-    let normalized = hostname.trim_matches(&['[', ']'][..]).to_lowercase();
-    if matches!(
-        normalized.as_str(),
-        "localhost" | "host.docker.internal"
-    ) || normalized.ends_with(".local")
-    {
-        return true;
-    }
-    if let Ok(address) = normalized.parse::<IpAddr>() {
-        return match address {
-            IpAddr::V4(ipv4) => {
-                ipv4.is_loopback()
-                    || ipv4.is_private()
-                    || ipv4.is_unspecified()
-                    || ipv4.is_multicast()
-            }
-            IpAddr::V6(ipv6) => {
-                ipv6.is_loopback()
-                    || ipv6.is_unspecified()
-                    || ipv6.is_multicast()
-            }
-        };
-    }
-    !normalized.contains('.')
-}
-
 fn segment_text(duration_sec: f64, motion_prompt: Option<&str>) -> String {
     let duration = format!("--dur {}", duration_sec.round() as i64);
     match motion_prompt {
@@ -303,21 +240,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn extract_url_host_parses_https() {
-        assert_eq!(
-            extract_url_host("https://cdn.example.com/path/frame.png"),
-            Some("cdn.example.com")
-        );
-    }
-
-    #[test]
-    fn private_hosts_are_rejected() {
-        assert!(is_private_host("localhost"));
-        assert!(is_private_host("127.0.0.1"));
-        assert!(!is_private_host("oss.example.com"));
-    }
 
     #[test]
     fn segment_text_includes_motion_and_duration() {

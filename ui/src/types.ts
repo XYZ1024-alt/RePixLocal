@@ -213,13 +213,6 @@ export type Settings = {
   mock_providers?: boolean;
   whisper_bin?: string;
   whisper_model_dir?: string;
-  s3_endpoint?: string;
-  s3_public_endpoint?: string;
-  s3_bucket?: string;
-  s3_access_key?: string;
-  s3_secret_key?: string;
-  s3_secret_configured?: boolean;
-  s3_secret_decrypt_failed?: boolean;
 };
 
 export type CreateTaskPayload = {

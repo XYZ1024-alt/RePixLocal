@@ -12,7 +12,7 @@ RePix Local 是 [RePix](https://github.com) 的本地桌面版：用 **Tauri 2 +
 | **新建任务** | 选择本地 MP4/MOV，配置分辨率、画幅、语言、改写风格等，提交后进入控制台 |
 | **控制台** | 历史 run 列表；详情页含阶段时间线、实时日志、费用与任务素材；支持取消运行与恢复失败任务 |
 | **素材库** | 按类型筛选（全部 / 成片 / 片段 / 分镜 / 音频），本地文件预览 |
-| **设置** | Provider API Key、OSS/S3、Whisper/FFmpeg 路径、Mock 模式开关 |
+| **设置** | Provider API Key、Whisper/FFmpeg 路径、Mock 模式开关 |
 
 实时更新通过 Tauri `pipeline-event` 事件推送，运行中的任务辅以轮询兜底。
 
@@ -20,7 +20,7 @@ RePix Local 是 [RePix](https://github.com) 的本地桌面版：用 **Tauri 2 +
 
 - **前端**：React 18、Vite 5、Tailwind CSS v4、Radix UI、Zod
 - **桌面壳**：Tauri 2（Windows NSIS 安装包）
-- **后端**：Rust（Tokio、SQLx + SQLite、reqwest、rust-s3）
+- **后端**：Rust（Tokio、SQLx + SQLite、reqwest）
 - **媒体**：FFmpeg / FFprobe、whisper.cpp
 - **密钥**：系统 keyring + AES-GCM 加密存储
 
@@ -79,7 +79,7 @@ re-pix-local/
 │   │   ├── db/             # SQLite repository + migrations
 │   │   ├── providers/      # DeepSeek、Qwen-VL、Tongyi、Seedance
 │   │   ├── media/          # FFmpeg、whisper.cpp、ASS 字幕
-│   │   └── storage/        # 本地素材 + OSS/S3
+│   │   └── storage/        # 本地素材
 │   └── tauri.conf.json
 ├── .github/workflows/      # CI（typecheck + cargo test）
 ├── index.html
@@ -100,7 +100,7 @@ re-pix-local/
 ```
 RePixLocal/
 ├── repix.sqlite      # 任务、run、日志、用量等
-├── config.json       # 系统设置（FFmpeg、OSS、Mock 模式等）
+├── config.json       # 系统设置（FFmpeg、Whisper、Mock 模式等）
 ├── tasks/<task_id>/  # 各任务素材（source、audio、frames、segments、final…）
 ├── logs/
 ├── temp/
@@ -115,11 +115,11 @@ RePixLocal/
 |---|------|----------|-----------------|
 | 1 | Transcript Extraction | ✅ | FFmpeg 抽音频 + whisper.cpp；可选 DeepSeek 字幕校正 |
 | 2 | Script Rewrite | ✅ | FFmpeg 抽关键帧 + Qwen-VL 分析 + DeepSeek 改写 |
-| 3 | Storyboard Generation | ✅ | OSS 上传关键帧 + Tongyi img2img |
-| 4 | Segment Generation | ✅ | OSS 上传分镜图 + Seedance 图生视频 |
+| 3 | Storyboard Generation | ✅ | 关键帧 Base64 内联 + Tongyi img2img |
+| 4 | Segment Generation | ✅ | 分镜图 Base64 内联 + Seedance 图生视频 |
 | 5 | Final Render | ✅ | FFmpeg 拼接片段 + 烧录 ASS 字幕 + 混入源音频 |
 
-**Mock 模式**（设置 → Mock providers）：无需 API Key / OSS，五阶段使用本地占位数据，适合离线演示。
+**Mock 模式**（设置 → Mock providers）：无需 API Key，五阶段使用本地占位数据，适合离线演示。
 
 **恢复运行**：失败或取消的任务可在控制台点击「恢复运行」，自动跳过已生成的阶段/场景产物，从断点继续。
 
@@ -139,16 +139,6 @@ RePixLocal/
 
 DashScope 三项在底层仍分别记录模型名，但共用同一份加密 Key。DeepSeek / Seedance 各自单独配置 Key、可选 Base URL 与模型。API Key 通过系统 keyring 加密，不以明文写入数据库。
 
-### 对象存储（Stage 3/4 必需）
-
-Tongyi 与 Seedance 需要公网 HTTPS 图片 URL。在 **设置 → 系统设置 → 对象存储** 中配置：
-
-| 字段 | 说明 |
-|------|------|
-| S3 Endpoint | 如 `https://oss-cn-shanghai.aliyuncs.com` |
-| Public Endpoint | 自定义域名（阿里云 OSS 强烈建议配置，否则 Provider 可能无法读取图片） |
-| Bucket / Access Key / Secret Key | 标准 S3 兼容凭证 |
-
 ### 外部工具
 
 | 工具 | 用途 |
@@ -165,7 +155,7 @@ Tongyi 与 Seedance 需要公网 HTTPS 图片 URL。在 **设置 → 系统设�
 | 前端 | Next.js | Vite + React |
 | 数据 | Prisma + Postgres | SQLx + SQLite |
 | 任务执行 | FastAPI + Celery | Rust workflow（进程内 tokio） |
-| 存储 | MinIO/OSS 为主 | 本地文件 + OSS（Provider 调用） |
+| 存储 | 远程文件服务为主 | 本地文件 + Base64 内联传图 |
 | 实时更新 | SSE | Tauri `pipeline-event` |
 | 登录 | 需要 | 跳过（本地单用户） |
 

@@ -12,6 +12,8 @@
     "ui:dev": "vite --host 127.0.0.1",
     "ui:build": "vite build",
     "ui:check": "tsc --noEmit",
+    "test:e2e": "node scripts/run-e2e.mjs",
+    "test:e2e:headed": "node scripts/run-e2e.mjs --headed",
     "rust:check": "bun run fetch-tools && cargo check --manifest-path src-tauri/Cargo.toml",
     "rust:test": "bun run fetch-tools && cargo test --manifest-path src-tauri/Cargo.toml",
     "test": "bun run ui:check && bun run rust:test",
@@ -32,6 +34,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.0",
     "@tailwindcss/vite": "^4.0.0",
     "@tauri-apps/cli": "^2.0.0",
     "@types/react": "^18.3.3",

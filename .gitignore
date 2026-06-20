@@ -33,6 +33,8 @@ Thumbs.db
 
 # Test and package manager caches
 coverage/
+playwright-report/
+test-results/
 .nyc_output/
 .npm/
 .pnpm-store/

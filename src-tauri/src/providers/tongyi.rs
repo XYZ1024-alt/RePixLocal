@@ -1,20 +1,14 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
-
 
 use serde_json::{json, Value};
-use tokio::time::sleep;
 
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
 use crate::providers::http_client::format_http_error;
-use crate::storage::oss::OssClient;
+use crate::providers::image_payload::image_data_url;
 
 const DEFAULT_IMAGE_SIZE: &str = "1280*720";
-const LEGACY_REF_MODE: &str = "repaint";
-const POLL_INTERVAL_SECONDS: u64 = 2;
-const POLL_MAX_ATTEMPTS: usize = 60;
 const WAN_MULTIMODAL_SIZE: &str = "2K";
 const WAN27_MODEL_PREFIX: &str = "wan2.7-image";
 
@@ -51,38 +45,26 @@ impl TongyiClient {
 
     pub async fn generate_frame_img2img(
         &self,
-        oss: &OssClient,
-        source_key: &str,
         source_path: &Path,
         prompt: &str,
         scene_index: i32,
-        strength: f64,
+        _strength: f64,
         aspect_ratio: &str,
     ) -> AppResult<TongyiOutput> {
-        oss.put_file(source_key, source_path, "image/png").await?;
-        let ref_image_url = oss.public_url(source_key).await?;
-        tracing::info!("Tongyi scene {scene_index} reference URL: {ref_image_url}");
         let prompt = provider_safe_prompt(prompt)?;
         let settings = self.repo.get_provider_settings("TONGYI").await?;
-        let (size, width, height) = legacy_size_for_aspect(aspect_ratio);
         let model = settings.model.clone();
         if uses_wan_multimodal_api(&model) {
+            let (_, width, height) = legacy_size_for_aspect(aspect_ratio);
+            let ref_image = image_data_url(source_path).await?;
+            tracing::info!("Tongyi scene {scene_index} using inline base64 reference image");
             return self
-                .generate_wan_multimodal(&settings, &model, &ref_image_url, &prompt, width, height)
+                .generate_wan_multimodal(&settings, &model, &ref_image, &prompt, width, height)
                 .await;
         }
-        let ref_strength = 1.0 - strength;
-        self.generate_legacy(
-            &settings,
-            &model,
-            &ref_image_url,
-            &prompt,
-            ref_strength,
-            &size,
-            width,
-            height,
-        )
-        .await
+        Err(AppError::Provider(
+            "Tongyi legacy models require a public image URL. Switch to a wan2.7-image model.".into(),
+        ))
     }
 
     async fn generate_wan_multimodal(
@@ -131,109 +113,6 @@ impl TongyiClient {
             .await
             .map_err(|error| AppError::Provider(error.to_string()))?;
         extract_result(&body, width, height)
-    }
-
-    async fn generate_legacy(
-        &self,
-        settings: &crate::models::ProviderSettings,
-        model: &str,
-        ref_image_url: &str,
-        prompt: &str,
-        ref_strength: f64,
-        size: &str,
-        width: i32,
-        height: i32,
-    ) -> AppResult<TongyiOutput> {
-        let base_url = settings.base_url.trim_end_matches('/');
-        let client = http_client()?;
-        let payload = json!({
-            "model": model,
-            "input": { "prompt": prompt, "ref_image": ref_image_url },
-            "parameters": {
-                "ref_strength": ref_strength,
-                "ref_mode": LEGACY_REF_MODE,
-                "size": size,
-                "n": 1
-            }
-        });
-        let url = format!("{base_url}/services/aigc/text2image/image-synthesis");
-        let response = client
-            .post(&url)
-            .headers(json_headers(&settings.api_key))
-            .header("X-DashScope-Async", "enable")
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|error| AppError::Provider(format_http_error(&url, &error)))?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(AppError::Provider(format!(
-                "Tongyi legacy error ({status}): {body}"
-            )));
-        }
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|error| AppError::Provider(error.to_string()))?;
-        if let Some(task_id) = body
-            .pointer("/output/task_id")
-            .and_then(Value::as_str)
-        {
-            return self
-                .poll_legacy_task(settings, task_id, width, height)
-                .await;
-        }
-        extract_result(&body, width, height)
-    }
-
-    async fn poll_legacy_task(
-        &self,
-        settings: &crate::models::ProviderSettings,
-        task_id: &str,
-        width: i32,
-        height: i32,
-    ) -> AppResult<TongyiOutput> {
-        let base_url = settings.base_url.trim_end_matches('/');
-        let client = http_client()?;
-        for _ in 0..POLL_MAX_ATTEMPTS {
-            let url =
-                format!("{base_url}/services/aigc/text2image/image-synthesis/{task_id}");
-            let response = client
-                .get(&url)
-                .header("Authorization", format!("Bearer {}", settings.api_key))
-                .send()
-                .await
-                .map_err(|error| AppError::Provider(format_http_error(&url, &error)))?;
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                return Err(AppError::Provider(format!(
-                    "Tongyi poll error ({status}): {body}"
-                )));
-            }
-            let body: Value = response
-                .json()
-                .await
-                .map_err(|error| AppError::Provider(error.to_string()))?;
-            let status = body
-                .pointer("/output/task_status")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            match status {
-                "SUCCEEDED" => return extract_result(&body, width, height),
-                "FAILED" | "CANCELED" => {
-                    return Err(AppError::Provider(format!(
-                        "Tongyi task {task_id} failed: {body}"
-                    )));
-                }
-                _ => sleep(Duration::from_secs(POLL_INTERVAL_SECONDS)).await,
-            }
-        }
-        Err(AppError::Provider(format!(
-            "Tongyi task {task_id} timed out after {}s",
-            POLL_MAX_ATTEMPTS as u64 * POLL_INTERVAL_SECONDS
-        )))
     }
 }
 

@@ -25,7 +25,7 @@ use crate::providers::http_client::is_transient_provider_error;
 use crate::providers::seedance::{SegmentPollStatus, SeedanceClient};
 use crate::providers::tongyi::TongyiClient;
 use crate::storage::local_assets::{asset_for_path, mock_transcript_segments, AssetManager};
-use crate::storage::oss::OssClient;
+
 use crate::workspace::Workspace;
 use crate::workflow::events::{emit_pipeline_event, PipelineEvent};
 use crate::workflow::stages::{ordered_stages, stage_event_name};
@@ -203,11 +203,6 @@ impl PipelineRunner {
                     .await
             }
         }
-    }
-
-    async fn oss_client(&self) -> AppResult<OssClient> {
-        let config = self.config.read().await;
-        OssClient::from_config(&config)
     }
 
     async fn real_transcript_stage(
@@ -502,7 +497,6 @@ impl PipelineRunner {
     ) -> AppResult<()> {
         self.begin_stage(run_id, &StageType::StoryboardGeneration, app)
             .await?;
-        let oss = self.oss_client().await?;
         let tongyi = TongyiClient::new(self.repo.clone());
         let aspect_ratio = task
             .config_json
@@ -536,7 +530,6 @@ impl PipelineRunner {
             }
             let keyframe_path = scene_keyframe_path(&scene, task_id, &self.assets)?;
             let prompt = scene_storyboard_prompt(&scene);
-            let source_key = format!("tasks/{task_id}/keyframes/{index}.png");
             self.log(
                 task_id,
                 run_id,
@@ -546,15 +539,7 @@ impl PipelineRunner {
             )
             .await?;
             let output = tongyi
-                .generate_frame_img2img(
-                    &oss,
-                    &source_key,
-                    &keyframe_path,
-                    &prompt,
-                    index,
-                    0.35,
-                    aspect_ratio,
-                )
+                .generate_frame_img2img(&keyframe_path, &prompt, index, 0.35, aspect_ratio)
                 .await?;
             download_to_file(&output.source_url, &frame_path).await?;
             let frame = asset_for_path(
@@ -842,7 +827,6 @@ impl PipelineRunner {
     ) -> AppResult<()> {
         self.begin_stage(run_id, &StageType::SegmentGeneration, app)
             .await?;
-        let oss = self.oss_client().await?;
         let seedance = SeedanceClient::new(self.repo.clone());
         let scenes = self.scenes_for_run(task_id, run_id).await?;
 
@@ -875,7 +859,6 @@ impl PipelineRunner {
             }
             let motion = scene.motion_prompt.as_deref();
             let duration_sec = scene_duration_secs(scene);
-            let frame_key = format!("tasks/{task_id}/frames/{index}.png");
             let job_id = if let Some(job_id) = scene_seedance_job_id(scene) {
                 self.log(
                     task_id,
@@ -896,7 +879,7 @@ impl PipelineRunner {
                 )
                 .await?;
                 let job_id = seedance
-                    .submit_segment(&oss, &frame_key, &frame_path, duration_sec, motion)
+                    .submit_segment(&frame_path, duration_sec, motion)
                     .await?;
                 let mut metadata = scene
                     .metadata_json

@@ -47,7 +47,7 @@ pub fn decrypt_secret(encrypted: &str) -> AppResult<String> {
     if key_mismatch {
         return Err(secret_error(
             "decrypt",
-            "encryption key mismatch — re-enter API keys and S3 secret in Settings",
+            "encryption key mismatch - re-enter API keys in Settings",
         ));
     }
     Err(secret_error("decrypt", "no master encryption key available"))

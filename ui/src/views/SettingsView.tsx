@@ -809,18 +809,6 @@ function SystemSettingsForm(props: {
   const [whisperBin, setWhisperBin] = useState(props.initialSettings.whisper_bin ?? "");
   const [whisperModelDir, setWhisperModelDir] = useState(props.initialSettings.whisper_model_dir ?? "");
   const [mockProviders, setMockProviders] = useState(props.initialSettings.mock_providers ?? true);
-  const [s3Endpoint, setS3Endpoint] = useState(props.initialSettings.s3_endpoint ?? "");
-  const [s3PublicEndpoint, setS3PublicEndpoint] = useState(props.initialSettings.s3_public_endpoint ?? "");
-  const [s3Bucket, setS3Bucket] = useState(props.initialSettings.s3_bucket ?? "");
-  const [s3AccessKey, setS3AccessKey] = useState(props.initialSettings.s3_access_key ?? "");
-  const [s3SecretKey, setS3SecretKey] = useState("");
-  const [s3SecretConfigured, setS3SecretConfigured] = useState(
-    props.initialSettings.s3_secret_configured ?? false
-  );
-  const [s3SecretDecryptFailed, setS3SecretDecryptFailed] = useState(
-    props.initialSettings.s3_secret_decrypt_failed ?? false
-  );
-  const [showS3Secret, setShowS3Secret] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -831,13 +819,6 @@ function SystemSettingsForm(props: {
     setWhisperBin(props.initialSettings.whisper_bin ?? "");
     setWhisperModelDir(props.initialSettings.whisper_model_dir ?? "");
     setMockProviders(props.initialSettings.mock_providers ?? true);
-    setS3Endpoint(props.initialSettings.s3_endpoint ?? "");
-    setS3PublicEndpoint(props.initialSettings.s3_public_endpoint ?? "");
-    setS3Bucket(props.initialSettings.s3_bucket ?? "");
-    setS3AccessKey(props.initialSettings.s3_access_key ?? "");
-    setS3SecretConfigured(props.initialSettings.s3_secret_configured ?? false);
-    setS3SecretDecryptFailed(props.initialSettings.s3_secret_decrypt_failed ?? false);
-    setS3SecretKey("");
   }, [props.initialSettings]);
 
   useEffect(() => {
@@ -869,17 +850,9 @@ function SystemSettingsForm(props: {
         asr_model: asrModel,
         mock_providers: mockProviders,
         whisper_bin: whisperBin.trim() || undefined,
-        whisper_model_dir: whisperModelDir.trim() || undefined,
-        s3_endpoint: s3Endpoint.trim() || undefined,
-        s3_public_endpoint: s3PublicEndpoint.trim() || undefined,
-        s3_bucket: s3Bucket.trim() || undefined,
-        s3_access_key: s3AccessKey.trim() || undefined,
-        s3_secret_key: s3SecretKey.trim() || undefined
+        whisper_model_dir: whisperModelDir.trim() || undefined
       });
       props.onSaved(saved);
-      setS3SecretConfigured(saved.s3_secret_configured ?? false);
-      setS3SecretDecryptFailed(saved.s3_secret_decrypt_failed ?? false);
-      setS3SecretKey("");
       setMessage({ type: "success", text: t("system.saved") });
       window.setTimeout(() => setMessage(null), 3000);
     } catch {
@@ -978,87 +951,6 @@ function SystemSettingsForm(props: {
                 className="mt-1.5"
               />
               <p className="mt-1.5 text-xs text-muted-foreground">{t("system.ffprobeHint")}</p>
-            </div>
-
-            <div className="space-y-4 rounded-md border border-border/60 px-3 py-4">
-              <div>
-                <h3 className="text-sm font-medium">{t("system.ossTitle")}</h3>
-                <p className="mt-1 text-xs text-muted-foreground">{t("system.ossHint")}</p>
-              </div>
-
-              <div>
-                <Label htmlFor="s3Endpoint">{t("system.s3Endpoint")}</Label>
-                <Input
-                  id="s3Endpoint"
-                  type="url"
-                  value={s3Endpoint}
-                  onChange={(event) => setS3Endpoint(event.target.value)}
-                  placeholder="https://oss-cn-shanghai.aliyuncs.com"
-                  className="mt-1.5"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="s3PublicEndpoint">{t("system.s3PublicEndpoint")}</Label>
-                <Input
-                  id="s3PublicEndpoint"
-                  type="url"
-                  value={s3PublicEndpoint}
-                  onChange={(event) => setS3PublicEndpoint(event.target.value)}
-                  placeholder="https://oss.example.com"
-                  className="mt-1.5"
-                />
-                <p className="mt-1.5 text-xs text-muted-foreground">{t("system.s3PublicEndpointHint")}</p>
-              </div>
-
-              <div>
-                <Label htmlFor="s3Bucket">{t("system.s3Bucket")}</Label>
-                <Input
-                  id="s3Bucket"
-                  value={s3Bucket}
-                  onChange={(event) => setS3Bucket(event.target.value)}
-                  className="mt-1.5"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="s3AccessKey">{t("system.s3AccessKey")}</Label>
-                <Input
-                  id="s3AccessKey"
-                  value={s3AccessKey}
-                  onChange={(event) => setS3AccessKey(event.target.value)}
-                  className="mt-1.5"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="s3SecretKey">{t("system.s3SecretKey")}</Label>
-                <div className="relative mt-1.5">
-                  <Input
-                    id="s3SecretKey"
-                    type={showS3Secret ? "text" : "password"}
-                    placeholder={
-                      s3SecretDecryptFailed ? "" : s3SecretConfigured ? "********" : ""
-                    }
-                    value={s3SecretKey}
-                    onChange={(event) => setS3SecretKey(event.target.value)}
-                    className="pr-10"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowS3Secret((value) => !value)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
-                    {showS3Secret ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                  </button>
-                </div>
-                {s3SecretDecryptFailed && !s3SecretKey ? (
-                  <p className="mt-1 text-xs text-red-500">{t("system.s3SecretDecryptFailed")}</p>
-                ) : null}
-                {s3SecretConfigured && !s3SecretKey && !s3SecretDecryptFailed ? (
-                  <p className="mt-1 text-xs text-muted-foreground">{t("system.s3SecretConfigured")}</p>
-                ) : null}
-              </div>
             </div>
 
             <div className="flex items-center gap-3 pt-2">

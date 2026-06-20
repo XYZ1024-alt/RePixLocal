@@ -96,6 +96,7 @@ pub mod cosyvoice;
 pub mod deepseek;
 pub mod fetch;
 pub mod http_client;
+pub mod image_payload;
 pub mod json_util;
 pub mod model_catalog;
 pub mod qwen_vl;
