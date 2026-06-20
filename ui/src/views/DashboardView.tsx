@@ -1,18 +1,22 @@
+import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   CheckCircle2,
   Clock3,
   Plus,
+  RefreshCw,
   ShieldCheck,
+  Wallet,
   type LucideIcon
 } from "lucide-react";
+import { getDeepSeekBalance } from "@/api";
 import { BarChart, DonutChart } from "@/components/charts";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useLocale, useTranslations } from "@/i18n/context";
-import type { DashboardData } from "@/types";
+import type { DashboardData, DeepSeekBalance } from "@/types";
 
 const MIN_PROGRESS = 3;
 
@@ -57,6 +61,12 @@ type UsageRow = {
   meta: string;
 };
 
+type BalanceState = {
+  data: DeepSeekBalance | null;
+  loading: boolean;
+  error: string | null;
+};
+
 export function DashboardView(props: {
   data: DashboardData | null;
   onNewTask: () => void;
@@ -65,6 +75,25 @@ export function DashboardView(props: {
   const t = useTranslations("dashboard");
   const tStatus = useTranslations("status");
   const tStages = useTranslations("stages");
+  const [balanceState, setBalanceState] = useState<BalanceState>({
+    data: null,
+    loading: true,
+    error: null
+  });
+
+  const loadBalance = useCallback(async () => {
+    setBalanceState((state) => ({ ...state, loading: true, error: null }));
+    try {
+      const data = await getDeepSeekBalance();
+      setBalanceState({ data, loading: false, error: null });
+    } catch (error) {
+      setBalanceState({ data: null, loading: false, error: String(error) });
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadBalance();
+  }, [loadBalance]);
 
   if (!props.data) {
     return (
@@ -87,11 +116,18 @@ export function DashboardView(props: {
   const usageRows = props.data.usage.map((row) => ({
     provider: row.provider,
     quantity: row.quantity,
-    meta: t("usageMeta", {
-      quantity: row.quantity.toLocaleString(),
-      calls: row.calls.toLocaleString(),
-      cost: `$${row.cost_usd.toFixed(4)}`
-    })
+    meta:
+      row.unknown_cost_count > 0
+        ? t("usageMetaUnknownCost", {
+            quantity: row.quantity.toLocaleString(),
+            calls: row.calls.toLocaleString(),
+            unknown: row.unknown_cost_count.toLocaleString()
+          })
+        : t("usageMeta", {
+            quantity: row.quantity.toLocaleString(),
+            calls: row.calls.toLocaleString(),
+            cost: `$${row.cost_usd.toFixed(4)}`
+          })
   }));
   const donutSlices = Object.entries(props.data.status_count)
     .filter(([, value]) => value > 0)
@@ -130,7 +166,10 @@ export function DashboardView(props: {
         </div>
         <div className="grid gap-5 xl:grid-cols-[1.2fr_1fr]">
           <QueuePanel title={t("queueTitle")} emptyText={t("noRuns")} rows={queueRows} />
-          <UsagePanel title={t("apiUsageTitle")} emptyText={t("noUsage")} rows={usageRows} />
+          <div className="grid gap-5">
+            <BalancePanel state={balanceState} onRefresh={loadBalance} />
+            <UsagePanel title={t("apiUsageTitle")} emptyText={t("noUsage")} rows={usageRows} />
+          </div>
         </div>
       </div>
     </>
@@ -294,6 +333,96 @@ function QueueTable({ rows }: { rows: QueueRow[] }) {
   );
 }
 
+function BalancePanel({
+  state,
+  onRefresh
+}: {
+  state: BalanceState;
+  onRefresh: () => void;
+}) {
+  const { locale } = useLocale();
+  const t = useTranslations("dashboard");
+  const checkedAt = state.data ? formatCheckedAt(state.data.checked_at, locale) : null;
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Wallet className="size-4 text-emerald-300" />
+          <CardTitle>{t("balanceTitle")}</CardTitle>
+        </div>
+        <Button
+          aria-label={t("refreshBalance")}
+          disabled={state.loading}
+          onClick={onRefresh}
+          size="icon"
+          title={t("refreshBalance")}
+          type="button"
+          variant="outline"
+        >
+          <RefreshCw className={state.loading ? "animate-spin" : ""} />
+        </Button>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {state.loading && !state.data ? (
+          <p className="text-sm text-muted-foreground">{t("balanceLoading")}</p>
+        ) : null}
+        {state.error ? (
+          <p className="break-words text-sm text-red-300">
+            {t("balanceError", { message: state.error })}
+          </p>
+        ) : null}
+        {state.data ? (
+          <>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <Badge variant={state.data.is_available ? "success" : "warning"}>
+                {state.data.is_available ? t("balanceAvailable") : t("balanceUnavailable")}
+              </Badge>
+              {checkedAt ? <span>{t("balanceCheckedAt", { time: checkedAt })}</span> : null}
+            </div>
+            {state.data.balance_infos.length > 0 ? (
+              <div className="grid gap-3">
+                {state.data.balance_infos.map((info) => (
+                  <BalanceAccount key={info.currency} info={info} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">{t("balanceNoAccounts")}</p>
+            )}
+          </>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function BalanceAccount({ info }: { info: DeepSeekBalance["balance_infos"][number] }) {
+  const t = useTranslations("dashboard");
+
+  return (
+    <div className="rounded-md border border-white/[0.06] bg-white/[0.03] p-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs text-muted-foreground">{t("balanceCurrency")}</span>
+        <span className="text-sm font-semibold">{info.currency}</span>
+      </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <BalanceAmount label={t("balanceTotal")} value={info.total_balance} />
+        <BalanceAmount label={t("balanceGranted")} value={info.granted_balance} />
+        <BalanceAmount label={t("balanceToppedUp")} value={info.topped_up_balance} />
+      </div>
+    </div>
+  );
+}
+
+function BalanceAmount({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 truncate text-sm font-semibold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
 function UsagePanel({
   title,
   emptyText,
@@ -348,4 +477,15 @@ function ProgressBar({ value }: { value: number }) {
 
 function EmptyRow({ text }: { text: string }) {
   return <p className="px-5 py-4 text-sm text-muted-foreground">{text}</p>;
+}
+
+function formatCheckedAt(value: string, locale: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(locale, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }

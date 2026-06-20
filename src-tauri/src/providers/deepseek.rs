@@ -1,10 +1,15 @@
 use std::sync::Arc;
 
+use chrono::Utc;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
-use crate::models::{RewrittenScene, TranscriptSegment};
+use crate::models::{
+    DeepSeekBalance, DeepSeekBalanceInfo, ProviderListingCredentials, ProviderSettings,
+    RewrittenScene, TranscriptSegment,
+};
 use crate::providers::http_client::{build_http_client, format_http_error};
 use crate::providers::json_util::parse_json_payload;
 
@@ -73,6 +78,23 @@ pub struct DeepSeekClient {
     repo: Arc<Repository>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DeepSeekUsage {
+    pub total_tokens: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeepSeekOutput<T> {
+    pub value: T,
+    pub usage: DeepSeekUsage,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepSeekBalanceResponse {
+    is_available: bool,
+    balance_infos: Vec<DeepSeekBalanceInfo>,
+}
+
 impl DeepSeekClient {
     pub fn new(repo: Arc<Repository>) -> Self {
         Self { repo }
@@ -82,7 +104,7 @@ impl DeepSeekClient {
         &self,
         segments: &[TranscriptSegment],
         target_language: &str,
-    ) -> AppResult<Vec<TranscriptSegment>> {
+    ) -> AppResult<DeepSeekOutput<Vec<TranscriptSegment>>> {
         let settings = self.repo.get_provider_settings("DEEPSEEK").await?;
         let items: Vec<Value> = segments
             .iter()
@@ -110,9 +132,12 @@ impl DeepSeekClient {
                 }
             ],
         });
-        let content = self.chat_completion(&settings, payload).await?;
-        let corrections = parse_subtitle_corrections(&content, segments.len())?;
-        Ok(merge_subtitle_corrections(segments, &corrections))
+        let output = self.chat_completion(&settings, payload).await?;
+        let corrections = parse_subtitle_corrections(&output.value, segments.len())?;
+        Ok(DeepSeekOutput {
+            value: merge_subtitle_corrections(segments, &corrections),
+            usage: output.usage,
+        })
     }
 
     pub async fn rewrite_script_with_visuals(
@@ -122,7 +147,7 @@ impl DeepSeekClient {
         keyframe_paths: &[String],
         tone: &str,
         target_scenes: i32,
-    ) -> AppResult<Vec<RewrittenScene>> {
+    ) -> AppResult<DeepSeekOutput<Vec<RewrittenScene>>> {
         let settings = self.repo.get_provider_settings("DEEPSEEK").await?;
         let visual_context = visual_descriptions
             .iter()
@@ -146,14 +171,17 @@ impl DeepSeekClient {
                 }
             ],
         });
-        let content = self.chat_completion(&settings, payload).await?;
-        let mut scenes = parse_scenes(&content, target_scenes)?;
+        let output = self.chat_completion(&settings, payload).await?;
+        let mut scenes = parse_scenes(&output.value, target_scenes)?;
         for (index, scene) in scenes.iter_mut().enumerate() {
             if index < keyframe_paths.len() {
                 scene.keyframe_path = Some(keyframe_paths[index].clone());
             }
         }
-        Ok(scenes)
+        Ok(DeepSeekOutput {
+            value: scenes,
+            usage: output.usage,
+        })
     }
 
     pub async fn plan_script_from_images(
@@ -162,7 +190,7 @@ impl DeepSeekClient {
         visual_descriptions: &[String],
         tone: &str,
         target_scenes: i32,
-    ) -> AppResult<Vec<RewrittenScene>> {
+    ) -> AppResult<DeepSeekOutput<Vec<RewrittenScene>>> {
         let settings = self.repo.get_provider_settings("DEEPSEEK").await?;
         let visual_context = visual_descriptions
             .iter()
@@ -186,15 +214,57 @@ impl DeepSeekClient {
                 }
             ],
         });
-        let content = self.chat_completion(&settings, payload).await?;
-        parse_scenes(&content, target_scenes)
+        let output = self.chat_completion(&settings, payload).await?;
+        Ok(DeepSeekOutput {
+            value: parse_scenes(&output.value, target_scenes)?,
+            usage: output.usage,
+        })
+    }
+
+    pub async fn get_balance(&self) -> AppResult<DeepSeekBalance> {
+        let creds = self
+            .repo
+            .get_provider_listing_credentials("DEEPSEEK")
+            .await?;
+        self.fetch_balance(&creds).await
+    }
+
+    async fn fetch_balance(
+        &self,
+        creds: &ProviderListingCredentials,
+    ) -> AppResult<DeepSeekBalance> {
+        let url = deepseek_balance_url(&creds.base_url);
+        let client = build_http_client(30)?;
+        let response = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", creds.api_key))
+            .send()
+            .await
+            .map_err(|error| AppError::Provider(format_http_error(&url, &error)))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(AppError::Provider(format!(
+                "DeepSeek balance error ({status}): {body}"
+            )));
+        }
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| AppError::Provider(error.to_string()))?;
+        let parsed = parse_balance_response(body)?;
+        Ok(DeepSeekBalance {
+            is_available: parsed.is_available,
+            balance_infos: parsed.balance_infos,
+            checked_at: Utc::now().to_rfc3339(),
+        })
     }
 
     async fn chat_completion(
         &self,
-        settings: &crate::models::ProviderSettings,
+        settings: &ProviderSettings,
         payload: Value,
-    ) -> AppResult<String> {
+    ) -> AppResult<DeepSeekOutput<String>> {
         let base_url = normalize_openai_base_url(&settings.base_url);
         let client = build_http_client(120)?;
         let url = format!("{base_url}/chat/completions");
@@ -217,10 +287,17 @@ impl DeepSeekClient {
             .json()
             .await
             .map_err(|error| AppError::Provider(error.to_string()))?;
-        body["choices"][0]["message"]["content"]
+        let content = body["choices"][0]["message"]["content"]
             .as_str()
             .map(str::to_string)
-            .ok_or_else(|| AppError::Provider("DeepSeek returned empty content".into()))
+            .ok_or_else(|| AppError::Provider("DeepSeek returned empty content".into()))?;
+        let total_tokens = body["usage"]["total_tokens"].as_i64().ok_or_else(|| {
+            AppError::Provider("DeepSeek response missing usage.total_tokens".into())
+        })?;
+        Ok(DeepSeekOutput {
+            value: content,
+            usage: DeepSeekUsage { total_tokens },
+        })
     }
 }
 
@@ -231,6 +308,17 @@ fn normalize_openai_base_url(base_url: &str) -> String {
     } else {
         format!("{trimmed}/v1")
     }
+}
+
+fn deepseek_balance_url(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    let account_base = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
+    format!("{account_base}/user/balance")
+}
+
+fn parse_balance_response(body: Value) -> AppResult<DeepSeekBalanceResponse> {
+    serde_json::from_value(body)
+        .map_err(|error| AppError::Provider(format!("invalid DeepSeek balance response: {error}")))
 }
 
 fn parse_scenes(content: &str, target_scenes: i32) -> AppResult<Vec<RewrittenScene>> {
@@ -324,4 +412,42 @@ fn merge_subtitle_corrections(
             text: text.clone(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn deepseek_balance_url_strips_chat_api_suffix() {
+        assert_eq!(
+            deepseek_balance_url("https://api.deepseek.com"),
+            "https://api.deepseek.com/user/balance"
+        );
+        assert_eq!(
+            deepseek_balance_url("https://api.deepseek.com/v1"),
+            "https://api.deepseek.com/user/balance"
+        );
+        assert_eq!(
+            deepseek_balance_url("https://api.deepseek.com/v1/"),
+            "https://api.deepseek.com/user/balance"
+        );
+    }
+
+    #[test]
+    fn parse_balance_response_keeps_amounts_as_strings() {
+        let value = json!({
+            "is_available": true,
+            "balance_infos": [{
+                "currency": "CNY",
+                "total_balance": "100.00",
+                "granted_balance": "20.00",
+                "topped_up_balance": "80.00"
+            }]
+        });
+        let parsed = parse_balance_response(value).expect("parse balance response");
+        assert!(parsed.is_available);
+        assert_eq!(parsed.balance_infos[0].total_balance, "100.00");
+    }
 }

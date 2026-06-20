@@ -104,6 +104,7 @@ export type UsageItem = {
   calls: number;
   quantity: number;
   cost_usd: number;
+  unknown_cost_count: number;
 };
 
 export type DashboardData = {
@@ -112,6 +113,19 @@ export type DashboardData = {
   trend: TrendPoint[];
   queue: QueueItem[];
   usage: UsageItem[];
+};
+
+export type DeepSeekBalanceInfo = {
+  currency: string;
+  total_balance: string;
+  granted_balance: string;
+  topped_up_balance: string;
+};
+
+export type DeepSeekBalance = {
+  is_available: boolean;
+  balance_infos: DeepSeekBalanceInfo[];
+  checked_at: string;
 };
 
 export type RunListItem = {

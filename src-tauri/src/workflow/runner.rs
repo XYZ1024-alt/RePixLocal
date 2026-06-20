@@ -18,7 +18,7 @@ use crate::media::subtitles::{
 use crate::media::whisper::WhisperRunner;
 use crate::models::{AssetType, Scene, StageType, Task, TaskStatus, WorkflowTaskType};
 use crate::providers::cosyvoice::CosyVoiceClient;
-use crate::providers::deepseek::DeepSeekClient;
+use crate::providers::deepseek::{DeepSeekClient, DeepSeekUsage};
 use crate::providers::fetch::download_to_file;
 use crate::providers::http_client::is_transient_provider_error;
 use crate::providers::qwen_vl::QwenVlClient;
@@ -38,6 +38,15 @@ pub struct PipelineRunner {
     whisper: Arc<WhisperRunner>,
     config: Arc<RwLock<AppConfig>>,
     workspace: Workspace,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UsageLog<'a> {
+    provider: &'a str,
+    endpoint: &'a str,
+    unit: &'a str,
+    quantity: f64,
+    cost_usd: Option<f64>,
 }
 
 impl PipelineRunner {
@@ -274,18 +283,12 @@ impl PipelineRunner {
             )
             .await?;
             let deepseek = DeepSeekClient::new(self.repo.clone());
-            segments = deepseek
+            let output = deepseek
                 .correct_subtitles(&segments, &subtitle_target_language(&task.config_json))
                 .await?;
-            self.record_usage(
-                "DEEPSEEK",
-                task_id,
-                run_id,
-                "chat/completions",
-                "tokens",
-                segments.len() as f64 * 80.0,
-            )
-            .await?;
+            segments = output.value;
+            self.record_deepseek_usage(task_id, run_id, output.usage)
+                .await?;
         }
 
         let segment_count = segments.len();
@@ -309,12 +312,15 @@ impl PipelineRunner {
         );
         self.repo.insert_asset(&subtitle).await?;
         self.record_usage(
-            "ASR",
             task_id,
             run_id,
-            "transcribe",
-            "seconds",
-            duration_secs,
+            UsageLog {
+                provider: "ASR",
+                endpoint: "transcribe",
+                unit: "seconds",
+                quantity: duration_secs,
+                cost_usd: Some(0.0),
+            },
         )
         .await?;
         self.log(
@@ -428,12 +434,15 @@ impl PipelineRunner {
         let qwen = QwenVlClient::new(self.repo.clone());
         let analysis = qwen.analyze_video_frames(&frame_paths).await?;
         self.record_usage(
-            "QWEN_VL",
             task_id,
             run_id,
-            "multimodal-generation/generation",
-            "images",
-            analysis.frame_count as f64,
+            UsageLog {
+                provider: "QWEN_VL",
+                endpoint: "multimodal-generation/generation",
+                unit: "images",
+                quantity: analysis.frame_count as f64,
+                cost_usd: Some(0.0),
+            },
         )
         .await?;
 
@@ -454,7 +463,7 @@ impl PipelineRunner {
         )
         .await?;
         let deepseek = DeepSeekClient::new(self.repo.clone());
-        let scenes = deepseek
+        let output = deepseek
             .rewrite_script_with_visuals(
                 &transcript,
                 &analysis.descriptions,
@@ -463,17 +472,10 @@ impl PipelineRunner {
                 scene_count,
             )
             .await?;
-        self.record_usage(
-            "DEEPSEEK",
-            task_id,
-            run_id,
-            "chat/completions",
-            "tokens",
-            scene_count as f64 * 150.0,
-        )
-        .await?;
+        self.record_deepseek_usage(task_id, run_id, output.usage)
+            .await?;
 
-        for scene in scenes {
+        for scene in output.value {
             let metadata_json = Some(json!({
                 "keyframePath": scene.keyframe_path,
                 "startMs": scene.start_ms,
@@ -570,12 +572,15 @@ impl PipelineRunner {
             )
             .await?;
             self.record_usage(
-                "TONGYI",
                 task_id,
                 run_id,
-                "image2image/image-synthesis",
-                "images",
-                1.0,
+                UsageLog {
+                    provider: "TONGYI",
+                    endpoint: "image2image/image-synthesis",
+                    unit: "images",
+                    quantity: 1.0,
+                    cost_usd: Some(0.0),
+                },
             )
             .await?;
         }
@@ -630,12 +635,15 @@ impl PipelineRunner {
         let qwen = QwenVlClient::new(self.repo.clone());
         let analysis = qwen.analyze_video_frames(&image_paths).await?;
         self.record_usage(
-            "QWEN_VL",
             task_id,
             run_id,
-            "multimodal-generation/generation",
-            "images",
-            analysis.frame_count as f64,
+            UsageLog {
+                provider: "QWEN_VL",
+                endpoint: "multimodal-generation/generation",
+                unit: "images",
+                quantity: analysis.frame_count as f64,
+                cost_usd: Some(0.0),
+            },
         )
         .await?;
 
@@ -653,20 +661,13 @@ impl PipelineRunner {
         )
         .await?;
         let deepseek = DeepSeekClient::new(self.repo.clone());
-        let scenes = deepseek
+        let output = deepseek
             .plan_script_from_images(&requirements, &analysis.descriptions, tone, scene_count)
             .await?;
-        self.record_usage(
-            "DEEPSEEK",
-            task_id,
-            run_id,
-            "chat/completions",
-            "tokens",
-            scene_count as f64 * 150.0,
-        )
-        .await?;
+        self.record_deepseek_usage(task_id, run_id, output.usage)
+            .await?;
 
-        for scene in scenes {
+        for scene in output.value {
             let source_image = self.assets.source_image_path(task_id, scene.index);
             let frame_path = self.assets.frame_path(task_id, scene.index);
             self.assets.copy_file(&source_image, &frame_path).await?;
@@ -789,12 +790,15 @@ impl PipelineRunner {
             self.repo.insert_asset(&tts_asset).await?;
             segment_paths.push(tts_path);
             self.record_usage(
-                "COSYVOICE",
                 task_id,
                 run_id,
-                "audio/tts/SpeechSynthesizer",
-                "characters",
-                scene.script_text.chars().count() as f64,
+                UsageLog {
+                    provider: "COSYVOICE",
+                    endpoint: "audio/tts/SpeechSynthesizer",
+                    unit: "characters",
+                    quantity: scene.script_text.chars().count() as f64,
+                    cost_usd: Some(0.0),
+                },
             )
             .await?;
         }
@@ -921,12 +925,15 @@ impl PipelineRunner {
             )
             .await?;
             self.record_usage(
-                "SEEDANCE",
                 task_id,
                 run_id,
-                "video/submit",
-                "seconds",
-                duration_sec,
+                UsageLog {
+                    provider: "SEEDANCE",
+                    endpoint: "video/submit",
+                    unit: "seconds",
+                    quantity: duration_sec,
+                    cost_usd: Some(0.0),
+                },
             )
             .await?;
         }
@@ -1202,8 +1209,18 @@ impl PipelineRunner {
             None,
         );
         self.repo.insert_asset(&subtitle).await?;
-        self.record_usage("ASR", task_id, run_id, "transcribe", "seconds", 15.0)
-            .await?;
+        self.record_usage(
+            task_id,
+            run_id,
+            UsageLog {
+                provider: "ASR",
+                endpoint: "transcribe",
+                unit: "seconds",
+                quantity: 15.0,
+                cost_usd: Some(0.0),
+            },
+        )
+        .await?;
 
         self.complete_stage(run_id, &StageType::TranscriptExtraction, app)
             .await
@@ -1248,12 +1265,15 @@ impl PipelineRunner {
             ));
         }
         self.record_usage(
-            "QWEN_VL",
             task_id,
             run_id,
-            "analyze_frames",
-            "images",
-            scene_count as f64,
+            UsageLog {
+                provider: "QWEN_VL",
+                endpoint: "analyze_frames",
+                unit: "images",
+                quantity: scene_count as f64,
+                cost_usd: Some(0.0),
+            },
         )
         .await?;
 
@@ -1296,12 +1316,15 @@ impl PipelineRunner {
             self.repo.insert_scene(&scene).await?;
         }
         self.record_usage(
-            "DEEPSEEK",
             task_id,
             run_id,
-            "chat/completions",
-            "tokens",
-            scene_count as f64 * 150.0,
+            UsageLog {
+                provider: "DEEPSEEK",
+                endpoint: "chat/completions",
+                unit: "tokens",
+                quantity: scene_count as f64 * 150.0,
+                cost_usd: Some(0.0),
+            },
         )
         .await?;
 
@@ -1357,12 +1380,15 @@ impl PipelineRunner {
             self.repo.insert_scene(&scene).await?;
         }
         self.record_usage(
-            "DEEPSEEK",
             task_id,
             run_id,
-            "chat/completions",
-            "tokens",
-            scene_count as f64 * 150.0,
+            UsageLog {
+                provider: "DEEPSEEK",
+                endpoint: "chat/completions",
+                unit: "tokens",
+                quantity: scene_count as f64 * 150.0,
+                cost_usd: Some(0.0),
+            },
         )
         .await?;
         self.complete_stage(run_id, &StageType::ScriptPlanning, app)
@@ -1417,12 +1443,15 @@ impl PipelineRunner {
         );
         self.repo.insert_asset(&narration).await?;
         self.record_usage(
-            "COSYVOICE",
             task_id,
             run_id,
-            "audio/tts/SpeechSynthesizer",
-            "characters",
-            scene_count as f64 * 40.0,
+            UsageLog {
+                provider: "COSYVOICE",
+                endpoint: "audio/tts/SpeechSynthesizer",
+                unit: "characters",
+                quantity: scene_count as f64 * 40.0,
+                cost_usd: Some(0.0),
+            },
         )
         .await?;
         self.complete_stage(run_id, &StageType::TtsSynthesis, app)
@@ -1460,12 +1489,15 @@ impl PipelineRunner {
             )
             .await?;
             self.record_usage(
-                "TONGYI",
                 task_id,
                 run_id,
-                "image2image/image-synthesis",
-                "images",
-                1.0,
+                UsageLog {
+                    provider: "TONGYI",
+                    endpoint: "image2image/image-synthesis",
+                    unit: "images",
+                    quantity: 1.0,
+                    cost_usd: Some(0.0),
+                },
             )
             .await?;
         }
@@ -1512,12 +1544,15 @@ impl PipelineRunner {
             )
             .await?;
             self.record_usage(
-                "SEEDANCE",
                 task_id,
                 run_id,
-                "submit_segment",
-                "seconds",
-                5.0,
+                UsageLog {
+                    provider: "SEEDANCE",
+                    endpoint: "submit_segment",
+                    unit: "seconds",
+                    quantity: 5.0,
+                    cost_usd: Some(0.0),
+                },
             )
             .await?;
         }
@@ -1678,25 +1713,42 @@ impl PipelineRunner {
 
     async fn record_usage(
         &self,
-        provider: &str,
         task_id: &str,
         run_id: &str,
-        endpoint: &str,
-        unit: &str,
-        quantity: f64,
+        usage: UsageLog<'_>,
     ) -> AppResult<()> {
         self.repo
             .insert_api_usage_log(
-                provider,
+                usage.provider,
                 Some(task_id),
                 Some(run_id),
-                endpoint,
-                unit,
-                quantity,
-                Some(0.0),
+                usage.endpoint,
+                usage.unit,
+                usage.quantity,
+                usage.cost_usd,
                 true,
             )
             .await
+    }
+
+    async fn record_deepseek_usage(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        usage: DeepSeekUsage,
+    ) -> AppResult<()> {
+        self.record_usage(
+            task_id,
+            run_id,
+            UsageLog {
+                provider: "DEEPSEEK",
+                endpoint: "chat/completions",
+                unit: "tokens",
+                quantity: usage.total_tokens as f64,
+                cost_usd: None,
+            },
+        )
+        .await
     }
 
     async fn is_canceled(&self, task_id: &str) -> AppResult<bool> {

@@ -919,7 +919,9 @@ impl Repository {
     async fn usage_by_provider(&self) -> AppResult<Vec<UsageItem>> {
         let rows = sqlx::query(
             "SELECT provider, COUNT(*) AS calls, COALESCE(SUM(quantity), 0) AS quantity, \
-             COALESCE(SUM(cost_usd), 0) AS cost_usd FROM api_usage_logs GROUP BY provider \
+             COALESCE(SUM(cost_usd), 0) AS cost_usd, \
+             SUM(CASE WHEN success != 0 AND cost_usd IS NULL THEN 1 ELSE 0 END) AS unknown_cost_count \
+             FROM api_usage_logs GROUP BY provider \
              ORDER BY provider ASC",
         )
         .fetch_all(&self.pool)
@@ -931,6 +933,7 @@ impl Repository {
                     calls: row.try_get("calls")?,
                     quantity: row.try_get("quantity")?,
                     cost_usd: row.try_get("cost_usd")?,
+                    unknown_cost_count: row.try_get("unknown_cost_count")?,
                 })
             })
             .collect()

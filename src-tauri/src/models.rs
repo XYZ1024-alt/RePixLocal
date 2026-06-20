@@ -218,6 +218,21 @@ pub struct ProviderListingCredentials {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeepSeekBalanceInfo {
+    pub currency: String,
+    pub total_balance: String,
+    pub granted_balance: String,
+    pub topped_up_balance: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeepSeekBalance {
+    pub is_available: bool,
+    pub balance_infos: Vec<DeepSeekBalanceInfo>,
+    pub checked_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewrittenScene {
     pub index: i32,
     pub script_text: String,
@@ -351,6 +366,7 @@ pub struct UsageItem {
     pub calls: i64,
     pub quantity: f64,
     pub cost_usd: f64,
+    pub unknown_cost_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

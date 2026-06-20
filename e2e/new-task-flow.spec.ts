@@ -178,6 +178,19 @@ async function installTauriMock(page: Page) {
           };
         case "get_dashboard_data":
           return dashboardData();
+        case "get_deepseek_balance":
+          return {
+            is_available: true,
+            checked_at: now,
+            balance_infos: [
+              {
+                currency: "CNY",
+                total_balance: "100.00",
+                granted_balance: "20.00",
+                topped_up_balance: "80.00"
+              }
+            ]
+          };
         case "ensure_whisper_model":
         case "get_whisper_model_status":
           return {

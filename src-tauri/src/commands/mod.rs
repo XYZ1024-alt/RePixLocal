@@ -5,12 +5,14 @@ use crate::errors::command_error;
 use crate::media::whisper_models;
 use crate::models::{
     AppLog, Asset, CostSummary, CreateTaskInput, DashboardData, DashboardSummary,
-    DashscopeCredentialInput, DashscopeCredentialView, PickedImageFile, PickedVideoFile,
-    PipelineRun, PipelineStage, ProviderCredentialInput, ProviderCredentialView,
+    DashscopeCredentialInput, DashscopeCredentialView, DeepSeekBalance, PickedImageFile,
+    PickedVideoFile, PipelineRun, PipelineStage, ProviderCredentialInput, ProviderCredentialView,
     ProviderModelOption, RunDetail, RunListItem, SubmitTaskResponse, Task, ToolCheck,
     WhisperModelStatus,
 };
-use crate::providers::{model_catalog, validate_provider_config, ProviderConfig};
+use crate::providers::{
+    deepseek::DeepSeekClient, model_catalog, validate_provider_config, ProviderConfig,
+};
 use crate::state::AppState;
 
 #[tauri::command]
@@ -34,6 +36,14 @@ pub async fn get_dashboard_summary(state: State<'_, AppState>) -> Result<Dashboa
 #[tauri::command]
 pub async fn get_dashboard_data(state: State<'_, AppState>) -> Result<DashboardData, String> {
     state.repo.dashboard_data().await.map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn get_deepseek_balance(state: State<'_, AppState>) -> Result<DeepSeekBalance, String> {
+    DeepSeekClient::new(state.repo.clone())
+        .get_balance()
+        .await
+        .map_err(command_error)
 }
 
 #[tauri::command]

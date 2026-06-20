@@ -4,6 +4,7 @@ import type {
   CostSummary,
   CreateTaskPayload,
   DashboardData,
+  DeepSeekBalance,
   PipelineRun,
   DashscopeCredentialPayload,
   DashscopeCredentialView,
@@ -23,6 +24,10 @@ import type {
 
 export async function getDashboardData() {
   return invoke<DashboardData>("get_dashboard_data");
+}
+
+export async function getDeepSeekBalance() {
+  return invoke<DeepSeekBalance>("get_deepseek_balance");
 }
 
 export async function listTasks() {

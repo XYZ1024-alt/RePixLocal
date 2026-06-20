@@ -13,11 +13,12 @@ pub mod workspace;
 
 use commands::{
     cancel_task, check_ffmpeg, create_task, ensure_whisper_model, get_dashboard_data,
-    get_dashboard_summary, get_latest_run, get_run, get_run_costs, get_settings, get_task,
-    get_whisper_model_status, list_all_assets, list_assets, list_dashscope_credentials, list_logs,
-    list_provider_credentials, list_provider_models, list_run_stages, list_runs, list_tasks,
-    pick_image_files, pick_video_file, reveal_asset, save_dashscope_credential,
-    save_provider_credential, start_task, submit_task, test_provider, update_settings,
+    get_dashboard_summary, get_deepseek_balance, get_latest_run, get_run, get_run_costs,
+    get_settings, get_task, get_whisper_model_status, list_all_assets, list_assets,
+    list_dashscope_credentials, list_logs, list_provider_credentials, list_provider_models,
+    list_run_stages, list_runs, list_tasks, pick_image_files, pick_video_file, reveal_asset,
+    save_dashscope_credential, save_provider_credential, start_task, submit_task, test_provider,
+    update_settings,
 };
 use state::AppState;
 use tauri::Manager;
@@ -44,6 +45,7 @@ pub fn run() {
             create_task,
             get_dashboard_summary,
             get_dashboard_data,
+            get_deepseek_balance,
             list_tasks,
             get_task,
             get_latest_run,
