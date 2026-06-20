@@ -233,6 +233,32 @@ pub struct DeepSeekBalance {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderBalanceStatus {
+    Available,
+    Unsupported,
+    NotConfigured,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderBalanceAccount {
+    pub currency: String,
+    pub total_balance: String,
+    pub granted_balance: Option<String>,
+    pub topped_up_balance: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderBalance {
+    pub provider: String,
+    pub status: ProviderBalanceStatus,
+    pub checked_at: String,
+    pub accounts: Vec<ProviderBalanceAccount>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewrittenScene {
     pub index: i32,
     pub script_text: String,

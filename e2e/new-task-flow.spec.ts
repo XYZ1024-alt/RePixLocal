@@ -191,6 +191,37 @@ async function installTauriMock(page: Page) {
               }
             ]
           };
+        case "get_provider_balances":
+          return [
+            {
+              provider: "DEEPSEEK",
+              status: "available",
+              checked_at: now,
+              accounts: [
+                {
+                  currency: "CNY",
+                  total_balance: "100.00",
+                  granted_balance: "20.00",
+                  topped_up_balance: "80.00"
+                }
+              ],
+              message: null
+            },
+            {
+              provider: "DASHSCOPE",
+              status: "unsupported",
+              checked_at: now,
+              accounts: [],
+              message: "DashScope model API key cannot query account balance"
+            },
+            {
+              provider: "SEEDANCE",
+              status: "unsupported",
+              checked_at: now,
+              accounts: [],
+              message: "Seedance Ark API key cannot query account balance"
+            }
+          ];
         case "ensure_whisper_model":
         case "get_whisper_model_status":
           return {

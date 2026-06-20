@@ -439,9 +439,9 @@ impl PipelineRunner {
             UsageLog {
                 provider: "QWEN_VL",
                 endpoint: "multimodal-generation/generation",
-                unit: "images",
-                quantity: analysis.frame_count as f64,
-                cost_usd: Some(0.0),
+                unit: "tokens",
+                quantity: analysis.usage.total_tokens as f64,
+                cost_usd: None,
             },
         )
         .await?;
@@ -578,8 +578,8 @@ impl PipelineRunner {
                     provider: "TONGYI",
                     endpoint: "image2image/image-synthesis",
                     unit: "images",
-                    quantity: 1.0,
-                    cost_usd: Some(0.0),
+                    quantity: output.image_count as f64,
+                    cost_usd: None,
                 },
             )
             .await?;
@@ -640,9 +640,9 @@ impl PipelineRunner {
             UsageLog {
                 provider: "QWEN_VL",
                 endpoint: "multimodal-generation/generation",
-                unit: "images",
-                quantity: analysis.frame_count as f64,
-                cost_usd: Some(0.0),
+                unit: "tokens",
+                quantity: analysis.usage.total_tokens as f64,
+                cost_usd: None,
             },
         )
         .await?;
@@ -764,7 +764,7 @@ impl PipelineRunner {
                 &format!("Scene {index}: synthesizing TTS with CosyVoice"),
             )
             .await?;
-            cosyvoice
+            let output = cosyvoice
                 .synthesize_to_file(&scene.script_text, voice, language, &tts_path)
                 .await?;
             let duration_secs = self.ffmpeg.probe_duration(&tts_path).await?;
@@ -796,8 +796,8 @@ impl PipelineRunner {
                     provider: "COSYVOICE",
                     endpoint: "audio/tts/SpeechSynthesizer",
                     unit: "characters",
-                    quantity: scene.script_text.chars().count() as f64,
-                    cost_usd: Some(0.0),
+                    quantity: output.characters as f64,
+                    cost_usd: None,
                 },
             )
             .await?;
@@ -907,6 +907,8 @@ impl PipelineRunner {
                 .poll_segment_with_cancel(task_id, run_id, app, &seedance, &job_id, index)
                 .await?;
             download_to_file(&video_url, &segment_path).await?;
+            let actual_duration_sec =
+                generated_segment_usage_seconds(self.ffmpeg.probe_duration(&segment_path).await?)?;
             let segment = asset_for_path(
                 task_id,
                 run_id,
@@ -931,8 +933,8 @@ impl PipelineRunner {
                     provider: "SEEDANCE",
                     endpoint: "video/submit",
                     unit: "seconds",
-                    quantity: duration_sec,
-                    cost_usd: Some(0.0),
+                    quantity: actual_duration_sec,
+                    cost_usd: None,
                 },
             )
             .await?;
@@ -1913,6 +1915,15 @@ fn scene_duration_secs(scene: &Scene) -> f64 {
         .unwrap_or(5.0)
 }
 
+fn generated_segment_usage_seconds(duration_secs: f64) -> AppResult<f64> {
+    if duration_secs.is_finite() && duration_secs > 0.0 {
+        return Ok(duration_secs);
+    }
+    Err(AppError::Workflow(format!(
+        "generated segment duration is invalid: {duration_secs}"
+    )))
+}
+
 fn keyframe_subtitle_region_ratio(config: &serde_json::Value) -> AppResult<Option<f64>> {
     let treatment = config
         .get("sourceSubtitleTreatment")
@@ -1932,4 +1943,16 @@ fn keyframe_subtitle_region_ratio(config: &serde_json::Value) -> AppResult<Optio
             .and_then(|value| value.as_f64())
             .unwrap_or(DEFAULT_SUBTITLE_REGION_RATIO),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_segment_usage_seconds_rejects_invalid_values() {
+        assert_eq!(generated_segment_usage_seconds(3.5).unwrap(), 3.5);
+        assert!(generated_segment_usage_seconds(0.0).is_err());
+        assert!(generated_segment_usage_seconds(f64::NAN).is_err());
+    }
 }

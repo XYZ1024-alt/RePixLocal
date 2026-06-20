@@ -15,6 +15,11 @@ pub struct CosyVoiceClient {
     repo: Arc<Repository>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct CosyVoiceOutput {
+    pub characters: usize,
+}
+
 impl CosyVoiceClient {
     pub fn new(repo: Arc<Repository>) -> Self {
         Self { repo }
@@ -26,7 +31,7 @@ impl CosyVoiceClient {
         voice_key: &str,
         language: Option<&str>,
         out_path: &std::path::Path,
-    ) -> AppResult<()> {
+    ) -> AppResult<CosyVoiceOutput> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return Err(AppError::Provider("TTS text is empty".into()));
@@ -81,7 +86,10 @@ impl CosyVoiceClient {
         if let Some(parent) = out_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        download_to_file(audio_url, out_path).await
+        download_to_file(audio_url, out_path).await?;
+        Ok(CosyVoiceOutput {
+            characters: text_character_count(trimmed),
+        })
     }
 }
 
@@ -111,6 +119,10 @@ fn language_hint(language: Option<&str>) -> Option<&'static str> {
     }
 }
 
+fn text_character_count(text: &str) -> usize {
+    text.chars().count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +144,10 @@ mod tests {
             cosyvoice_synthesizer_url("https://dashscope.aliyuncs.com"),
             "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer"
         );
+    }
+
+    #[test]
+    fn text_character_count_counts_trimmed_input() {
+        assert_eq!(text_character_count("你好abc"), 5);
     }
 }

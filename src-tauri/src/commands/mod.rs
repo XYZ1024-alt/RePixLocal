@@ -1,3 +1,4 @@
+use chrono::Utc;
 use tauri::{AppHandle, State};
 
 use crate::config::{save, AppConfig};
@@ -6,9 +7,9 @@ use crate::media::whisper_models;
 use crate::models::{
     AppLog, Asset, CostSummary, CreateTaskInput, DashboardData, DashboardSummary,
     DashscopeCredentialInput, DashscopeCredentialView, DeepSeekBalance, PickedImageFile,
-    PickedVideoFile, PipelineRun, PipelineStage, ProviderCredentialInput, ProviderCredentialView,
-    ProviderModelOption, RunDetail, RunListItem, SubmitTaskResponse, Task, ToolCheck,
-    WhisperModelStatus,
+    PickedVideoFile, PipelineRun, PipelineStage, ProviderBalance, ProviderBalanceAccount,
+    ProviderBalanceStatus, ProviderCredentialInput, ProviderCredentialView, ProviderModelOption,
+    RunDetail, RunListItem, SubmitTaskResponse, Task, ToolCheck, WhisperModelStatus,
 };
 use crate::providers::{
     deepseek::DeepSeekClient, model_catalog, validate_provider_config, ProviderConfig,
@@ -44,6 +45,159 @@ pub async fn get_deepseek_balance(state: State<'_, AppState>) -> Result<DeepSeek
         .get_balance()
         .await
         .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn get_provider_balances(
+    state: State<'_, AppState>,
+) -> Result<Vec<ProviderBalance>, String> {
+    let provider_credentials = state
+        .repo
+        .list_provider_credentials()
+        .await
+        .map_err(command_error)?;
+    let dashscope = state
+        .repo
+        .list_dashscope_credentials()
+        .await
+        .map_err(command_error)?;
+    let mut balances = Vec::new();
+    balances.push(deepseek_provider_balance(&state, &provider_credentials).await);
+    balances.push(dashscope_provider_balance(&dashscope));
+    balances.push(seedance_provider_balance(&provider_credentials));
+    Ok(balances)
+}
+
+async fn deepseek_provider_balance(
+    state: &AppState,
+    credentials: &[ProviderCredentialView],
+) -> ProviderBalance {
+    let provider = "DEEPSEEK";
+    let checked_at = Utc::now().to_rfc3339();
+    if let Some(balance) = credential_issue_balance(provider, credentials, &checked_at) {
+        return balance;
+    }
+    match DeepSeekClient::new(state.repo.clone()).get_balance().await {
+        Ok(balance) => ProviderBalance {
+            provider: provider.to_string(),
+            status: if balance.is_available {
+                ProviderBalanceStatus::Available
+            } else {
+                ProviderBalanceStatus::Error
+            },
+            checked_at: balance.checked_at,
+            accounts: balance
+                .balance_infos
+                .into_iter()
+                .map(deepseek_account)
+                .collect(),
+            message: if balance.is_available {
+                None
+            } else {
+                Some("DeepSeek account is unavailable".to_string())
+            },
+        },
+        Err(error) => error_balance(provider, &checked_at, error.to_string()),
+    }
+}
+
+fn dashscope_provider_balance(credential: &DashscopeCredentialView) -> ProviderBalance {
+    let checked_at = Utc::now().to_rfc3339();
+    if credential.key_decrypt_failed {
+        return error_balance(
+            "DASHSCOPE",
+            &checked_at,
+            "DashScope API key cannot be decrypted".to_string(),
+        );
+    }
+    if credential.masked_key.trim().is_empty() {
+        return not_configured_balance("DASHSCOPE", &checked_at);
+    }
+    if credential.keys_mismatch {
+        return error_balance(
+            "DASHSCOPE",
+            &checked_at,
+            "DashScope saved keys differ across services".to_string(),
+        );
+    }
+    unsupported_balance(
+        "DASHSCOPE",
+        &checked_at,
+        "DashScope model API key cannot query account balance".to_string(),
+    )
+}
+
+fn seedance_provider_balance(credentials: &[ProviderCredentialView]) -> ProviderBalance {
+    let provider = "SEEDANCE";
+    let checked_at = Utc::now().to_rfc3339();
+    if let Some(balance) = credential_issue_balance(provider, credentials, &checked_at) {
+        return balance;
+    }
+    unsupported_balance(
+        provider,
+        &checked_at,
+        "Seedance Ark API key cannot query account balance".to_string(),
+    )
+}
+
+fn credential_issue_balance(
+    provider: &str,
+    credentials: &[ProviderCredentialView],
+    checked_at: &str,
+) -> Option<ProviderBalance> {
+    let credential = credentials
+        .iter()
+        .find(|entry| entry.provider == provider)?;
+    if credential.key_decrypt_failed {
+        return Some(error_balance(
+            provider,
+            checked_at,
+            format!("{provider} API key cannot be decrypted"),
+        ));
+    }
+    if credential.masked_key.trim().is_empty() {
+        return Some(not_configured_balance(provider, checked_at));
+    }
+    None
+}
+
+fn deepseek_account(info: crate::models::DeepSeekBalanceInfo) -> ProviderBalanceAccount {
+    ProviderBalanceAccount {
+        currency: info.currency,
+        total_balance: info.total_balance,
+        granted_balance: Some(info.granted_balance),
+        topped_up_balance: Some(info.topped_up_balance),
+    }
+}
+
+fn not_configured_balance(provider: &str, checked_at: &str) -> ProviderBalance {
+    ProviderBalance {
+        provider: provider.to_string(),
+        status: ProviderBalanceStatus::NotConfigured,
+        checked_at: checked_at.to_string(),
+        accounts: Vec::new(),
+        message: Some(format!("{provider} API key is not configured")),
+    }
+}
+
+fn unsupported_balance(provider: &str, checked_at: &str, message: String) -> ProviderBalance {
+    ProviderBalance {
+        provider: provider.to_string(),
+        status: ProviderBalanceStatus::Unsupported,
+        checked_at: checked_at.to_string(),
+        accounts: Vec::new(),
+        message: Some(message),
+    }
+}
+
+fn error_balance(provider: &str, checked_at: &str, message: String) -> ProviderBalance {
+    ProviderBalance {
+        provider: provider.to_string(),
+        status: ProviderBalanceStatus::Error,
+        checked_at: checked_at.to_string(),
+        accounts: Vec::new(),
+        message: Some(message),
+    }
 }
 
 #[tauri::command]
@@ -410,4 +564,38 @@ pub async fn pick_video_file() -> Result<Option<PickedVideoFile>, String> {
         name: file.file_name(),
         size_bytes: metadata.len(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dashscope_balance_reports_not_configured_without_key() {
+        let balance = dashscope_provider_balance(&DashscopeCredentialView {
+            masked_key: String::new(),
+            key_decrypt_failed: false,
+            keys_mismatch: false,
+            base_url: None,
+            qwen_vl_model: None,
+            tongyi_model: None,
+            cosyvoice_model: None,
+        });
+        assert!(matches!(
+            balance.status,
+            ProviderBalanceStatus::NotConfigured
+        ));
+    }
+
+    #[test]
+    fn seedance_balance_reports_unsupported_when_key_exists() {
+        let credentials = vec![ProviderCredentialView {
+            provider: "SEEDANCE".to_string(),
+            masked_key: "sk-****".to_string(),
+            key_decrypt_failed: false,
+            config: None,
+        }];
+        let balance = seedance_provider_balance(&credentials);
+        assert!(matches!(balance.status, ProviderBalanceStatus::Unsupported));
+    }
 }

@@ -9,14 +9,14 @@ import {
   Wallet,
   type LucideIcon
 } from "lucide-react";
-import { getDeepSeekBalance } from "@/api";
+import { getProviderBalances } from "@/api";
 import { BarChart, DonutChart } from "@/components/charts";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useLocale, useTranslations } from "@/i18n/context";
-import type { DashboardData, DeepSeekBalance } from "@/types";
+import type { DashboardData, ProviderBalance, ProviderBalanceAccount } from "@/types";
 
 const MIN_PROGRESS = 3;
 
@@ -62,9 +62,19 @@ type UsageRow = {
 };
 
 type BalanceState = {
-  data: DeepSeekBalance | null;
+  data: ProviderBalance[] | null;
   loading: boolean;
   error: string | null;
+};
+
+const balanceStatusVariant: Record<
+  ProviderBalance["status"],
+  "success" | "warning" | "destructive" | "secondary"
+> = {
+  available: "success",
+  unsupported: "secondary",
+  not_configured: "warning",
+  error: "destructive"
 };
 
 export function DashboardView(props: {
@@ -84,7 +94,7 @@ export function DashboardView(props: {
   const loadBalance = useCallback(async () => {
     setBalanceState((state) => ({ ...state, loading: true, error: null }));
     try {
-      const data = await getDeepSeekBalance();
+      const data = await getProviderBalances();
       setBalanceState({ data, loading: false, error: null });
     } catch (error) {
       setBalanceState({ data: null, loading: false, error: String(error) });
@@ -340,9 +350,7 @@ function BalancePanel({
   state: BalanceState;
   onRefresh: () => void;
 }) {
-  const { locale } = useLocale();
   const t = useTranslations("dashboard");
-  const checkedAt = state.data ? formatCheckedAt(state.data.checked_at, locale) : null;
 
   return (
     <Card>
@@ -373,42 +381,65 @@ function BalancePanel({
           </p>
         ) : null}
         {state.data ? (
-          <>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Badge variant={state.data.is_available ? "success" : "warning"}>
-                {state.data.is_available ? t("balanceAvailable") : t("balanceUnavailable")}
-              </Badge>
-              {checkedAt ? <span>{t("balanceCheckedAt", { time: checkedAt })}</span> : null}
-            </div>
-            {state.data.balance_infos.length > 0 ? (
-              <div className="grid gap-3">
-                {state.data.balance_infos.map((info) => (
-                  <BalanceAccount key={info.currency} info={info} />
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">{t("balanceNoAccounts")}</p>
-            )}
-          </>
+          <div className="grid gap-3">
+            {state.data.map((balance) => (
+              <ProviderBalanceRow key={balance.provider} balance={balance} />
+            ))}
+          </div>
         ) : null}
       </CardContent>
     </Card>
   );
 }
 
-function BalanceAccount({ info }: { info: DeepSeekBalance["balance_infos"][number] }) {
+function ProviderBalanceRow({ balance }: { balance: ProviderBalance }) {
+  const { locale } = useLocale();
   const t = useTranslations("dashboard");
+  const checkedAt = formatCheckedAt(balance.checked_at, locale);
+  const message = providerBalanceMessage(balance, t);
 
   return (
     <div className="rounded-md border border-white/[0.06] bg-white/[0.03] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm font-semibold">{providerBalanceLabel(balance.provider)}</span>
+        <Badge variant={balanceStatusVariant[balance.status]}>
+          {t(`balanceStatus.${balance.status}`)}
+        </Badge>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {t("balanceCheckedAt", { time: checkedAt })}
+      </p>
+      {message ? (
+        <p className="mt-2 break-words text-xs text-muted-foreground">{message}</p>
+      ) : null}
+      {balance.accounts.length > 0 ? (
+        <div className="mt-3 grid gap-3">
+          {balance.accounts.map((account) => (
+            <BalanceAccount key={`${balance.provider}-${account.currency}`} info={account} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function BalanceAccount({ info }: { info: ProviderBalanceAccount }) {
+  const t = useTranslations("dashboard");
+
+  return (
+    <div className="rounded-md border border-white/[0.06] bg-black/10 p-3">
       <div className="flex items-center justify-between gap-3">
         <span className="text-xs text-muted-foreground">{t("balanceCurrency")}</span>
         <span className="text-sm font-semibold">{info.currency}</span>
       </div>
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         <BalanceAmount label={t("balanceTotal")} value={info.total_balance} />
-        <BalanceAmount label={t("balanceGranted")} value={info.granted_balance} />
-        <BalanceAmount label={t("balanceToppedUp")} value={info.topped_up_balance} />
+        {info.granted_balance ? (
+          <BalanceAmount label={t("balanceGranted")} value={info.granted_balance} />
+        ) : null}
+        {info.topped_up_balance ? (
+          <BalanceAmount label={t("balanceToppedUp")} value={info.topped_up_balance} />
+        ) : null}
       </div>
     </div>
   );
@@ -477,6 +508,34 @@ function ProgressBar({ value }: { value: number }) {
 
 function EmptyRow({ text }: { text: string }) {
   return <p className="px-5 py-4 text-sm text-muted-foreground">{text}</p>;
+}
+
+function providerBalanceLabel(provider: string) {
+  const labels: Record<string, string> = {
+    DASHSCOPE: "DashScope",
+    DEEPSEEK: "DeepSeek",
+    SEEDANCE: "Seedance"
+  };
+  return labels[provider] ?? provider;
+}
+
+function providerBalanceMessage(
+  balance: ProviderBalance,
+  t: (key: string, values?: Record<string, string | number>) => string
+) {
+  if (balance.status === "unsupported" && balance.provider === "DASHSCOPE") {
+    return t("balanceUnsupportedDashscope");
+  }
+  if (balance.status === "unsupported" && balance.provider === "SEEDANCE") {
+    return t("balanceUnsupportedSeedance");
+  }
+  if (balance.status === "not_configured") {
+    return t("balanceNotConfigured", { provider: providerBalanceLabel(balance.provider) });
+  }
+  if (balance.status === "error") {
+    return balance.message ?? t("balanceStatus.error");
+  }
+  return null;
 }
 
 function formatCheckedAt(value: string, locale: string) {

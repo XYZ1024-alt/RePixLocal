@@ -58,7 +58,7 @@
     "usageMeta": "{quantity} 单位 / {calls} 次调用 / {cost}",
     "usageMetaUnknownCost": "{quantity} 单位 / {calls} 次调用 / {unknown} 次费用未知",
     "noUsage": "暂无 API 用量记录。",
-    "balanceTitle": "DeepSeek 余额",
+    "balanceTitle": "服务商余额",
     "refreshBalance": "刷新余额",
     "balanceLoading": "正在查询余额...",
     "balanceAvailable": "可用",
@@ -70,6 +70,15 @@
     "balanceToppedUp": "充值余额",
     "balanceNoAccounts": "接口未返回余额账户。",
     "balanceError": "余额查询失败：{message}",
+    "balanceUnsupportedDashscope": "当前 DashScope 模型 API Key 不能查询账户余额。",
+    "balanceUnsupportedSeedance": "当前 Seedance Ark API Key 不能查询账户余额。",
+    "balanceNotConfigured": "{provider} API Key 未配置。",
+    "balanceStatus": {
+      "available": "可用",
+      "unsupported": "不支持",
+      "not_configured": "未配置",
+      "error": "错误"
+    },
     "openConsole": "打开控制台"
   },
   "console": {

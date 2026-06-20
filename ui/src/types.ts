@@ -128,6 +128,23 @@ export type DeepSeekBalance = {
   checked_at: string;
 };
 
+export type ProviderBalanceStatus = "available" | "unsupported" | "not_configured" | "error";
+
+export type ProviderBalanceAccount = {
+  currency: string;
+  total_balance: string;
+  granted_balance?: string | null;
+  topped_up_balance?: string | null;
+};
+
+export type ProviderBalance = {
+  provider: string;
+  status: ProviderBalanceStatus;
+  checked_at: string;
+  accounts: ProviderBalanceAccount[];
+  message?: string | null;
+};
+
 export type RunListItem = {
   id: string;
   task_id: string;

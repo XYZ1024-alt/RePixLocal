@@ -33,6 +33,12 @@ pub struct QwenVlClient {
 pub struct FrameAnalysisResult {
     pub descriptions: Vec<String>,
     pub frame_count: usize,
+    pub usage: QwenVlUsage,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct QwenVlUsage {
+    pub total_tokens: i64,
 }
 
 impl QwenVlClient {
@@ -48,6 +54,7 @@ impl QwenVlClient {
         let base_url = settings.base_url.trim_end_matches('/').to_string();
         let client = build_http_client(300)?;
         let mut descriptions = Vec::with_capacity(frame_paths.len());
+        let mut total_tokens = 0i64;
         for (index, frame_path) in frame_paths.iter().enumerate() {
             let bytes = tokio::fs::read(frame_path.as_ref())
                 .await
@@ -89,14 +96,42 @@ impl QwenVlClient {
                 .await
                 .map_err(|error| AppError::Provider(error.to_string()))?;
             let description = extract_description(&body, index)?;
+            let usage = extract_usage(&body, index)?;
+            total_tokens += usage.total_tokens;
             descriptions.push(description);
         }
         let frame_count = descriptions.len();
         Ok(FrameAnalysisResult {
             descriptions,
             frame_count,
+            usage: QwenVlUsage { total_tokens },
         })
     }
+}
+
+fn extract_usage(body: &Value, index: usize) -> AppResult<QwenVlUsage> {
+    if let Some(total_tokens) = body.pointer("/usage/total_tokens").and_then(Value::as_i64) {
+        return Ok(QwenVlUsage { total_tokens });
+    }
+    let input_tokens = body
+        .pointer("/usage/input_tokens")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| {
+            AppError::Provider(format!(
+                "Qwen-VL response missing usage.input_tokens for frame {index}"
+            ))
+        })?;
+    let output_tokens = body
+        .pointer("/usage/output_tokens")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| {
+            AppError::Provider(format!(
+                "Qwen-VL response missing usage.output_tokens for frame {index}"
+            ))
+        })?;
+    Ok(QwenVlUsage {
+        total_tokens: input_tokens + output_tokens,
+    })
 }
 
 fn extract_description(body: &Value, index: usize) -> AppResult<String> {
@@ -128,4 +163,33 @@ fn extract_description(body: &Value, index: usize) -> AppResult<String> {
         )));
     }
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extract_usage_accepts_total_tokens() {
+        let usage =
+            extract_usage(&json!({ "usage": { "total_tokens": 42 } }), 0).expect("parse usage");
+        assert_eq!(usage.total_tokens, 42);
+    }
+
+    #[test]
+    fn extract_usage_sums_input_and_output_tokens() {
+        let usage = extract_usage(
+            &json!({ "usage": { "input_tokens": 30, "output_tokens": 12 } }),
+            0,
+        )
+        .expect("parse usage");
+        assert_eq!(usage.total_tokens, 42);
+    }
+
+    #[test]
+    fn extract_usage_errors_when_missing() {
+        let error = extract_usage(&json!({ "output": {} }), 2).expect_err("missing usage");
+        assert!(error.to_string().contains("usage.input_tokens"));
+    }
 }

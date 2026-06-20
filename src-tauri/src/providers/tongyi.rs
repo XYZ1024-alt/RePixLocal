@@ -31,6 +31,7 @@ pub struct TongyiOutput {
     pub source_url: String,
     pub width: i32,
     pub height: i32,
+    pub image_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -118,31 +119,40 @@ impl TongyiClient {
 }
 
 fn extract_result(body: &Value, width: i32, height: i32) -> AppResult<TongyiOutput> {
-    if let Some(url) = body
-        .pointer("/output/results/0/url")
-        .and_then(Value::as_str)
-    {
-        return Ok(TongyiOutput {
-            source_url: url.to_string(),
-            width,
-            height,
-        });
+    if let Some(results) = body.pointer("/output/results").and_then(Value::as_array) {
+        let urls = results
+            .iter()
+            .filter_map(|item| item.get("url").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        if let Some(url) = urls.first() {
+            return Ok(TongyiOutput {
+                source_url: (*url).to_string(),
+                width,
+                height,
+                image_count: urls.len(),
+            });
+        }
     }
     if let Some(choices) = body.pointer("/output/choices").and_then(Value::as_array) {
+        let mut urls = Vec::new();
         for choice in choices {
             if let Some(content) = choice.pointer("/message/content").and_then(Value::as_array) {
                 for item in content {
                     if item.get("type").and_then(Value::as_str) == Some("image") {
                         if let Some(url) = item.get("image").and_then(Value::as_str) {
-                            return Ok(TongyiOutput {
-                                source_url: url.to_string(),
-                                width,
-                                height,
-                            });
+                            urls.push(url);
                         }
                     }
                 }
             }
+        }
+        if let Some(url) = urls.first() {
+            return Ok(TongyiOutput {
+                source_url: (*url).to_string(),
+                width,
+                height,
+                image_count: urls.len(),
+            });
         }
     }
     Err(AppError::Provider(format!(
@@ -251,5 +261,20 @@ mod tests {
         let (size, width, height) = legacy_size_for_aspect("9:16");
         assert_eq!(size, "720*1280");
         assert_eq!((width, height), (720, 1280));
+    }
+
+    #[test]
+    fn extract_result_counts_image_urls() {
+        let body = serde_json::json!({
+            "output": {
+                "results": [
+                    { "url": "https://example.com/a.png" },
+                    { "url": "https://example.com/b.png" }
+                ]
+            }
+        });
+        let output = extract_result(&body, 1280, 720).expect("extract result");
+        assert_eq!(output.source_url, "https://example.com/a.png");
+        assert_eq!(output.image_count, 2);
     }
 }

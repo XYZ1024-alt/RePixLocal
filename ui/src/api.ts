@@ -12,6 +12,7 @@ import type {
   ProviderCredentialView,
   PickedImageFile,
   PickedVideoFile,
+  ProviderBalance,
   ProviderModelOption,
   RunDetail,
   RunListItem,
@@ -28,6 +29,10 @@ export async function getDashboardData() {
 
 export async function getDeepSeekBalance() {
   return invoke<DeepSeekBalance>("get_deepseek_balance");
+}
+
+export async function getProviderBalances() {
+  return invoke<ProviderBalance[]>("get_provider_balances");
 }
 
 export async function listTasks() {

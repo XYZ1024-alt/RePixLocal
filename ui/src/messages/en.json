@@ -58,9 +58,9 @@
     "usageMeta": "{quantity} units / {calls} calls / {cost}",
     "usageMetaUnknownCost": "{quantity} units / {calls} calls / {unknown} unknown cost",
     "noUsage": "No API usage recorded yet.",
-    "balanceTitle": "DeepSeek Balance",
+    "balanceTitle": "Provider Balances",
     "refreshBalance": "Refresh balance",
-    "balanceLoading": "Checking balance...",
+    "balanceLoading": "Checking balances...",
     "balanceAvailable": "Available",
     "balanceUnavailable": "Unavailable",
     "balanceCheckedAt": "Checked {time}",
@@ -70,6 +70,15 @@
     "balanceToppedUp": "Topped up",
     "balanceNoAccounts": "No balance accounts returned.",
     "balanceError": "Balance query failed: {message}",
+    "balanceUnsupportedDashscope": "The current DashScope model API key cannot query account balance.",
+    "balanceUnsupportedSeedance": "The current Seedance Ark API key cannot query account balance.",
+    "balanceNotConfigured": "{provider} API key is not configured.",
+    "balanceStatus": {
+      "available": "Available",
+      "unsupported": "Unsupported",
+      "not_configured": "Not configured",
+      "error": "Error"
+    },
     "openConsole": "Open console"
   },
   "console": {
