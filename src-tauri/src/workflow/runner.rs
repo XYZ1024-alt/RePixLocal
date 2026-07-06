@@ -117,17 +117,29 @@ impl PipelineRunner {
             }
         }
 
-        self.repo.complete_run(run_id, task_id).await?;
-        self.log(task_id, run_id, app, "info", "workflow completed")
-            .await?;
-        emit_pipeline_event(
-            app,
-            PipelineEvent::Run {
-                run_id: run_id.to_string(),
-                task_id: task_id.to_string(),
-                status: "COMPLETED".to_string(),
-            },
-        );
+        if self.settle_run_completion(task_id, run_id).await? {
+            self.log(task_id, run_id, app, "info", "workflow completed")
+                .await?;
+            emit_pipeline_event(
+                app,
+                PipelineEvent::Run {
+                    run_id: run_id.to_string(),
+                    task_id: task_id.to_string(),
+                    status: "COMPLETED".to_string(),
+                },
+            );
+        } else {
+            self.log(task_id, run_id, app, "warn", "workflow canceled")
+                .await?;
+            emit_pipeline_event(
+                app,
+                PipelineEvent::Run {
+                    run_id: run_id.to_string(),
+                    task_id: task_id.to_string(),
+                    status: "CANCELLED".to_string(),
+                },
+            );
+        }
         Ok(())
     }
 
@@ -1657,10 +1669,12 @@ impl PipelineRunner {
         error: &str,
         app: &AppHandle,
     ) -> AppResult<()> {
-        self.repo.fail_run(run_id, stage.clone(), error).await?;
-        self.repo
-            .update_task_status(task_id, TaskStatus::Failed)
-            .await?;
+        if !self
+            .mark_run_failed(task_id, run_id, stage.clone(), error)
+            .await?
+        {
+            return Ok(());
+        }
         self.log(task_id, run_id, app, "error", error).await?;
         emit_pipeline_event(
             app,
@@ -1751,6 +1765,33 @@ impl PipelineRunner {
             },
         )
         .await
+    }
+
+    async fn mark_run_failed(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        stage: StageType,
+        error: &str,
+    ) -> AppResult<bool> {
+        if self.is_canceled(task_id).await? {
+            self.repo.cancel_run(run_id).await?;
+            return Ok(false);
+        }
+        self.repo.fail_run(run_id, stage, error).await?;
+        self.repo
+            .update_task_status(task_id, TaskStatus::Failed)
+            .await?;
+        Ok(true)
+    }
+
+    async fn settle_run_completion(&self, task_id: &str, run_id: &str) -> AppResult<bool> {
+        if self.is_canceled(task_id).await? {
+            self.repo.cancel_run(run_id).await?;
+            return Ok(false);
+        }
+        self.repo.complete_run(run_id, task_id).await?;
+        Ok(true)
     }
 
     async fn is_canceled(&self, task_id: &str) -> AppResult<bool> {
@@ -1948,11 +1989,118 @@ fn keyframe_subtitle_region_ratio(config: &serde_json::Value) -> AppResult<Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{CreateTaskInput, RunStatus};
 
     #[test]
     fn generated_segment_usage_seconds_rejects_invalid_values() {
         assert_eq!(generated_segment_usage_seconds(3.5).unwrap(), 3.5);
         assert!(generated_segment_usage_seconds(0.0).is_err());
         assert!(generated_segment_usage_seconds(f64::NAN).is_err());
+    }
+
+    async fn test_runner() -> (PipelineRunner, Arc<Repository>) {
+        let root = std::env::temp_dir().join(format!("repix-runner-test-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let workspace = Workspace::from_root(root);
+        let repo = Arc::new(Repository::initialize(&workspace).await.unwrap());
+        let config = Arc::new(RwLock::new(AppConfig::default_for(&workspace)));
+        let assets = Arc::new(AssetManager::new(workspace));
+        let ffmpeg = Arc::new(FfmpegRunner::new(config.clone()));
+        let whisper = Arc::new(WhisperRunner::new(config.clone()));
+        let runner = PipelineRunner::new(repo.clone(), assets, ffmpeg, whisper, config);
+        (runner, repo)
+    }
+
+    async fn task_with_run(repo: &Repository) -> (String, String) {
+        let task = repo
+            .create_task(CreateTaskInput {
+                title: "test task".into(),
+                source_path: "source.mp4".into(),
+                config_json: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        repo.update_task_status(&task.id, TaskStatus::Running)
+            .await
+            .unwrap();
+        let run = repo.create_run(&task.id).await.unwrap();
+        (task.id, run.id)
+    }
+
+    async fn canceled_task_with_run(repo: &Repository) -> (String, String) {
+        let (task_id, run_id) = task_with_run(repo).await;
+        repo.update_task_status(&task_id, TaskStatus::Canceled)
+            .await
+            .unwrap();
+        repo.cancel_run(&run_id).await.unwrap();
+        (task_id, run_id)
+    }
+
+    #[tokio::test]
+    async fn mark_run_failed_preserves_canceled_state() {
+        let (runner, repo) = test_runner().await;
+        let (task_id, run_id) = canceled_task_with_run(&repo).await;
+
+        let applied = runner
+            .mark_run_failed(&task_id, &run_id, StageType::SegmentGeneration, "boom")
+            .await
+            .unwrap();
+
+        assert!(!applied);
+        let task = repo.get_task(&task_id).await.unwrap().unwrap();
+        assert!(matches!(task.status, TaskStatus::Canceled));
+        let run = repo.latest_run(&task_id).await.unwrap().unwrap();
+        assert!(matches!(run.status, RunStatus::Canceled));
+    }
+
+    #[tokio::test]
+    async fn mark_run_failed_fails_active_run() {
+        let (runner, repo) = test_runner().await;
+        let (task_id, run_id) = task_with_run(&repo).await;
+
+        let applied = runner
+            .mark_run_failed(&task_id, &run_id, StageType::SegmentGeneration, "boom")
+            .await
+            .unwrap();
+
+        assert!(applied);
+        let task = repo.get_task(&task_id).await.unwrap().unwrap();
+        assert!(matches!(task.status, TaskStatus::Failed));
+        let run = repo.latest_run(&task_id).await.unwrap().unwrap();
+        assert!(matches!(run.status, RunStatus::Failed));
+    }
+
+    #[tokio::test]
+    async fn settle_run_completion_preserves_canceled_state() {
+        let (runner, repo) = test_runner().await;
+        let (task_id, run_id) = canceled_task_with_run(&repo).await;
+
+        let completed = runner
+            .settle_run_completion(&task_id, &run_id)
+            .await
+            .unwrap();
+
+        assert!(!completed);
+        let task = repo.get_task(&task_id).await.unwrap().unwrap();
+        assert!(matches!(task.status, TaskStatus::Canceled));
+        let run = repo.latest_run(&task_id).await.unwrap().unwrap();
+        assert!(matches!(run.status, RunStatus::Canceled));
+    }
+
+    #[tokio::test]
+    async fn settle_run_completion_completes_active_run() {
+        let (runner, repo) = test_runner().await;
+        let (task_id, run_id) = task_with_run(&repo).await;
+
+        let completed = runner
+            .settle_run_completion(&task_id, &run_id)
+            .await
+            .unwrap();
+
+        assert!(completed);
+        let task = repo.get_task(&task_id).await.unwrap().unwrap();
+        assert!(matches!(task.status, TaskStatus::Completed));
+        let run = repo.latest_run(&task_id).await.unwrap().unwrap();
+        assert!(matches!(run.status, RunStatus::Completed));
     }
 }

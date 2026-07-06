@@ -31,6 +31,7 @@ impl Repository {
         pool.execute(include_str!("migrations/0001_init.sql"))
             .await?;
         run_pending_migrations(&pool).await?;
+        fail_stale_running_runs(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -102,16 +103,25 @@ impl Repository {
             finished_at: None,
             created_at: Some(now),
         };
-        sqlx::query(
-            "INSERT INTO runs (id, task_id, status, current_stage, error, started_at, finished_at, created_at) VALUES (?, ?, ?, NULL, NULL, ?, NULL, ?)",
+        let result = sqlx::query(
+            "INSERT INTO runs (id, task_id, status, current_stage, error, started_at, finished_at, created_at) \
+             SELECT ?, ?, ?, NULL, NULL, ?, NULL, ? \
+             WHERE NOT EXISTS (SELECT 1 FROM runs WHERE task_id = ? AND status = ?)",
         )
         .bind(&run.id)
         .bind(&run.task_id)
         .bind(run_status_text(&run.status))
         .bind(run.started_at.map(|value| value.to_rfc3339()))
         .bind(run.created_at.map(|value| value.to_rfc3339()))
+        .bind(task_id)
+        .bind(run_status_text(&RunStatus::Running))
         .execute(&self.pool)
         .await?;
+        if result.rows_affected() == 0 {
+            return Err(crate::errors::AppError::Workflow(
+                "task already has an active run".into(),
+            ));
+        }
         Ok(run)
     }
 
@@ -1004,6 +1014,34 @@ async fn run_pending_migrations(pool: &SqlitePool) -> AppResult<()> {
     Ok(())
 }
 
+async fn fail_stale_running_runs(pool: &SqlitePool) -> AppResult<()> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE stages SET status = ?, finished_at = ? \
+         WHERE status = ? AND run_id IN (SELECT id FROM runs WHERE status = ?)",
+    )
+    .bind(stage_status_text(&StageStatus::Failed))
+    .bind(&now)
+    .bind(stage_status_text(&StageStatus::Running))
+    .bind(run_status_text(&RunStatus::Running))
+    .execute(pool)
+    .await?;
+    sqlx::query("UPDATE runs SET status = ?, error = ?, finished_at = ? WHERE status = ?")
+        .bind(run_status_text(&RunStatus::Failed))
+        .bind("interrupted by application restart")
+        .bind(&now)
+        .bind(run_status_text(&RunStatus::Running))
+        .execute(pool)
+        .await?;
+    sqlx::query("UPDATE tasks SET status = ?, updated_at = ? WHERE status = ?")
+        .bind(status_text(&TaskStatus::Failed))
+        .bind(&now)
+        .bind(status_text(&TaskStatus::Running))
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 async fn ensure_column(pool: &SqlitePool, table: &str, column: &str, ddl: &str) -> AppResult<()> {
     let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
         .fetch_all(pool)
@@ -1434,5 +1472,73 @@ fn default_provider_base_url(provider: &str) -> &'static str {
         "COSYVOICE" => "https://dashscope.aliyuncs.com/api/v1",
         "SEEDANCE" => "https://ark.cn-beijing.volces.com/api/v3",
         _ => "https://api.example.com",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::CreateTaskInput;
+
+    async fn test_repo() -> (Repository, Workspace) {
+        let root = std::env::temp_dir().join(format!("repix-db-test-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let workspace = Workspace::from_root(root);
+        let repo = Repository::initialize(&workspace).await.unwrap();
+        (repo, workspace)
+    }
+
+    async fn running_task(repo: &Repository) -> String {
+        let task = repo
+            .create_task(CreateTaskInput {
+                title: "test task".into(),
+                source_path: "source.mp4".into(),
+                config_json: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        repo.update_task_status(&task.id, TaskStatus::Running)
+            .await
+            .unwrap();
+        task.id
+    }
+
+    #[tokio::test]
+    async fn create_run_rejects_duplicate_active_run() {
+        let (repo, _workspace) = test_repo().await;
+        let task_id = running_task(&repo).await;
+
+        repo.create_run(&task_id).await.unwrap();
+        let second = repo.create_run(&task_id).await;
+
+        assert!(second.is_err(), "second concurrent run must be rejected");
+    }
+
+    #[tokio::test]
+    async fn create_run_allows_restart_after_terminal_run() {
+        let (repo, _workspace) = test_repo().await;
+        let task_id = running_task(&repo).await;
+
+        let first = repo.create_run(&task_id).await.unwrap();
+        repo.cancel_run(&first.id).await.unwrap();
+
+        repo.create_run(&task_id)
+            .await
+            .expect("restart after terminal run must be allowed");
+    }
+
+    #[tokio::test]
+    async fn initialize_fails_stale_running_runs() {
+        let (repo, workspace) = test_repo().await;
+        let task_id = running_task(&repo).await;
+        let run = repo.create_run(&task_id).await.unwrap();
+
+        let reopened = Repository::initialize(&workspace).await.unwrap();
+
+        let stale_run = reopened.latest_run(&task_id).await.unwrap().unwrap();
+        assert!(matches!(stale_run.status, RunStatus::Failed));
+        assert_eq!(stale_run.id, run.id);
+        let task = reopened.get_task(&task_id).await.unwrap().unwrap();
+        assert!(matches!(task.status, TaskStatus::Failed));
     }
 }

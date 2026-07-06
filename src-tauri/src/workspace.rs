@@ -18,6 +18,11 @@ impl Workspace {
         Ok(workspace)
     }
 
+    #[cfg(test)]
+    pub fn from_root(root: PathBuf) -> Self {
+        Self { root }
+    }
+
     pub fn root(&self) -> PathBuf {
         self.root.clone()
     }
