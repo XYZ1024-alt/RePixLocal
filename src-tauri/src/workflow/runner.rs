@@ -213,7 +213,7 @@ impl PipelineRunner {
                     .await
             }
             StageType::SegmentGeneration => {
-                self.real_segment_stage(task_id, run_id, app, scene_count)
+                self.real_segment_stage(task_id, run_id, app, task, scene_count)
                     .await
             }
             StageType::FinalRender => {
@@ -840,11 +840,13 @@ impl PipelineRunner {
         task_id: &str,
         run_id: &str,
         app: &AppHandle,
+        task: &Task,
         scene_count: i32,
     ) -> AppResult<()> {
         self.begin_stage(run_id, &StageType::SegmentGeneration, app)
             .await?;
         let seedance = SeedanceClient::new(self.repo.clone());
+        let resolution = resolution_from_config(&task.config_json);
         let scenes = self.scenes_for_run(task_id, run_id).await?;
 
         for index in 0..scene_count {
@@ -896,7 +898,7 @@ impl PipelineRunner {
                 )
                 .await?;
                 let job_id = seedance
-                    .submit_segment(&frame_path, duration_sec, motion)
+                    .submit_segment(&frame_path, duration_sec, motion, resolution.as_deref())
                     .await?;
                 let mut metadata = scene.metadata_json.clone().unwrap_or_else(|| json!({}));
                 if let Some(object) = metadata.as_object_mut() {
@@ -1836,6 +1838,15 @@ fn scene_count_from_config(config: &serde_json::Value, task_type: WorkflowTaskTy
     5
 }
 
+fn resolution_from_config(config: &serde_json::Value) -> Option<String> {
+    config
+        .get("resolution")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 fn requirements_from_config(config: &serde_json::Value) -> AppResult<String> {
     config
         .get("requirements")
@@ -1996,6 +2007,19 @@ mod tests {
         assert_eq!(generated_segment_usage_seconds(3.5).unwrap(), 3.5);
         assert!(generated_segment_usage_seconds(0.0).is_err());
         assert!(generated_segment_usage_seconds(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn resolution_from_config_reads_trimmed_string() {
+        assert_eq!(
+            resolution_from_config(&serde_json::json!({"resolution": "1080p"})),
+            Some("1080p".to_string())
+        );
+        assert_eq!(
+            resolution_from_config(&serde_json::json!({"resolution": "  "})),
+            None
+        );
+        assert_eq!(resolution_from_config(&serde_json::json!({})), None);
     }
 
     async fn test_runner() -> (PipelineRunner, Arc<Repository>) {

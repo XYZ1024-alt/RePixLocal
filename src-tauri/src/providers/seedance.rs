@@ -44,11 +44,12 @@ impl SeedanceClient {
         frame_path: &Path,
         duration_sec: f64,
         motion_prompt: Option<&str>,
+        resolution: Option<&str>,
     ) -> AppResult<String> {
         let image_url = image_data_url(frame_path).await?;
         let settings = self.repo.get_provider_settings("SEEDANCE").await?;
         let base_url = settings.base_url.trim_end_matches('/');
-        let text = segment_text(duration_sec, motion_prompt);
+        let text = segment_text(duration_sec, motion_prompt, resolution);
         let payload = json!({
             "model": settings.model,
             "generate_audio": false,
@@ -188,12 +189,20 @@ impl SeedanceClient {
     }
 }
 
-fn segment_text(duration_sec: f64, motion_prompt: Option<&str>) -> String {
-    let duration = format!("--dur {}", duration_sec.round() as i64);
-    match motion_prompt {
-        Some(prompt) if !prompt.trim().is_empty() => format!("{} {duration}", prompt.trim()),
-        _ => duration,
+fn segment_text(duration_sec: f64, motion_prompt: Option<&str>, resolution: Option<&str>) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(prompt) = motion_prompt {
+        if !prompt.trim().is_empty() {
+            parts.push(prompt.trim().to_string());
+        }
     }
+    if let Some(resolution) = resolution {
+        if !resolution.trim().is_empty() {
+            parts.push(format!("--rs {}", resolution.trim()));
+        }
+    }
+    parts.push(format!("--dur {}", duration_sec.round() as i64));
+    parts.join(" ")
 }
 
 fn submit_http_client() -> AppResult<reqwest::Client> {
@@ -240,9 +249,18 @@ mod tests {
     #[test]
     fn segment_text_includes_motion_and_duration() {
         assert_eq!(
-            segment_text(5.0, Some("slow zoom in")),
+            segment_text(5.0, Some("slow zoom in"), None),
             "slow zoom in --dur 5"
         );
-        assert_eq!(segment_text(4.2, None), "--dur 4");
+        assert_eq!(segment_text(4.2, None, None), "--dur 4");
+    }
+
+    #[test]
+    fn segment_text_includes_resolution_when_configured() {
+        assert_eq!(
+            segment_text(5.0, Some("slow zoom in"), Some("1080p")),
+            "slow zoom in --rs 1080p --dur 5"
+        );
+        assert_eq!(segment_text(4.2, None, Some("720p")), "--rs 720p --dur 4");
     }
 }

@@ -95,10 +95,6 @@ impl FfmpegRunner {
                 &path_arg(&list_path),
                 "-acodec",
                 "pcm_s16le",
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
                 &path_arg(out_path),
             ])
             .stdin(Stdio::null())
@@ -126,10 +122,6 @@ impl FfmpegRunner {
                 &path_arg(input),
                 "-acodec",
                 "pcm_s16le",
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
                 &path_arg(out_wav),
             ])
             .stdin(Stdio::null())
@@ -504,5 +496,93 @@ fn tool_check(
             error: Some(format!("{name} not found in PATH or bundled tools")),
             bundled: false,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_runner() -> FfmpegRunner {
+        FfmpegRunner::new(Arc::new(RwLock::new(AppConfig {
+            workspace_root: String::new(),
+            ffmpeg_path: None,
+            ffprobe_path: None,
+            asr_model: None,
+            mock_providers: true,
+            whisper_bin: None,
+            whisper_model_dir: None,
+        })))
+    }
+
+    async fn write_sine_wav(ffmpeg: &Path, out: &Path, sample_rate: u32) {
+        let status = Command::new(ffmpeg)
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("sine=frequency=440:duration=0.2:sample_rate={sample_rate}"),
+                &path_arg(out),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .expect("spawn ffmpeg");
+        assert!(status.success(), "failed to generate test wav");
+    }
+
+    fn wav_sample_rate(bytes: &[u8]) -> u32 {
+        let fmt_pos = bytes
+            .windows(4)
+            .position(|window| window == b"fmt ")
+            .expect("wav has fmt chunk");
+        u32::from_le_bytes(bytes[fmt_pos + 12..fmt_pos + 16].try_into().unwrap())
+    }
+
+    #[tokio::test]
+    async fn concat_audio_preserves_native_sample_rate() {
+        let runner = test_runner();
+        let ffmpeg = runner.ffmpeg_path().await.expect("ffmpeg available");
+        let dir = std::env::temp_dir().join(format!("repix-ffmpeg-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let first = dir.join("a.wav");
+        let second = dir.join("b.wav");
+        write_sine_wav(&ffmpeg, &first, 24_000).await;
+        write_sine_wav(&ffmpeg, &second, 24_000).await;
+
+        let out = dir.join("narration.wav");
+        runner
+            .concat_audio(&[first, second], &out)
+            .await
+            .expect("concat audio");
+
+        let bytes = tokio::fs::read(&out).await.unwrap();
+        assert_eq!(wav_sample_rate(&bytes), 24_000);
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn concat_audio_single_input_preserves_native_sample_rate() {
+        let runner = test_runner();
+        let ffmpeg = runner.ffmpeg_path().await.expect("ffmpeg available");
+        let dir = std::env::temp_dir().join(format!("repix-ffmpeg-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let only = dir.join("a.wav");
+        write_sine_wav(&ffmpeg, &only, 24_000).await;
+
+        let out = dir.join("narration.wav");
+        runner
+            .concat_audio(&[only], &out)
+            .await
+            .expect("concat audio");
+
+        let bytes = tokio::fs::read(&out).await.unwrap();
+        assert_eq!(wav_sample_rate(&bytes), 24_000);
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }
