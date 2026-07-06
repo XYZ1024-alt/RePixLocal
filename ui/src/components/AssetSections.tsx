@@ -3,14 +3,16 @@ import {
   FileText,
   FileVideo,
   Film,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Inbox
 } from "lucide-react";
 import { useTranslations } from "@/i18n/context";
+import { EmptyState } from "@/components/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import type { LibraryAsset } from "@/lib/library";
 
-type StatusVariant = "success" | "warning" | "destructive" | "secondary";
+type StatusVariant = "success" | "warning" | "destructive" | "secondary" | "default";
 type Translate = (key: string, values?: Record<string, number | string>) => string;
 
 type AssetSection = {
@@ -21,7 +23,7 @@ type AssetSection = {
 
 const statusBadge: Record<string, StatusVariant> = {
   READY: "success",
-  GENERATING: "warning",
+  GENERATING: "default",
   FAILED: "destructive"
 };
 
@@ -57,9 +59,9 @@ export function AssetSections({
   if (assets.length === 0) return <EmptyAssets text={emptyText} />;
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-5 animate-fade-in">
       {signingError ? (
-        <p className="rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+        <p className="rounded-md border border-red-900/50 bg-red-950/40 px-3 py-2 text-sm text-red-200">
           {signingErrorLabel}: {signingError}
         </p>
       ) : null}
@@ -90,8 +92,13 @@ function AssetGroup({
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">{section.title}</h2>
-        <Badge variant="outline">{viewAllLabel}</Badge>
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
+          <span className="h-2 w-2 rounded-full bg-cyan-400 shadow-glow" />
+          {section.title}
+        </h2>
+        <Badge variant="outline" className="hover:border-cyan-500/50 hover:text-cyan-300">
+          {viewAllLabel}
+        </Badge>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
         {section.assets.map((asset) => (
@@ -119,21 +126,21 @@ function AssetCard({
   const t = useTranslations("assets");
 
   return (
-    <Card className="overflow-hidden">
+    <Card interactive className="group">
       <Preview asset={asset} />
       <CardContent className="flex flex-col gap-3 p-3">
         <div className="flex items-start justify-between gap-2">
           <div className="flex min-w-0 flex-col gap-1">
-            <span className="truncate text-sm font-semibold">{assetTitle(asset)}</span>
+            <span className="truncate text-sm font-semibold text-white">{assetTitle(asset)}</span>
             {showTaskTitle ? (
-              <span className="text-xs text-muted-foreground">{asset.taskTitle}</span>
+              <span className="text-xs text-zinc-400">{asset.taskTitle}</span>
             ) : null}
           </div>
           <Badge variant={statusBadge[asset.status] ?? "secondary"}>
             {statusLabels[asset.status] ?? asset.status}
           </Badge>
         </div>
-        <span className="text-xs text-muted-foreground">{translateAssetType(t, asset.type)}</span>
+        <span className="text-xs text-zinc-400">{translateAssetType(t, asset.type)}</span>
       </CardContent>
     </Card>
   );
@@ -142,7 +149,15 @@ function AssetCard({
 function Preview({ asset }: { asset: LibraryAsset }) {
   if (asset.url && isImage(asset)) return <ImagePreview asset={asset} />;
   if (asset.url && isVideo(asset)) {
-    return <video src={asset.url} controls className="aspect-video w-full bg-black object-cover" />;
+    return (
+      <div className="aspect-video overflow-hidden rounded-t-xl bg-black">
+        <video
+          src={asset.url}
+          controls
+          className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
+        />
+      </div>
+    );
   }
   if (asset.url && isAudio(asset)) return <AudioPreview asset={asset} />;
   return <Placeholder asset={asset} />;
@@ -150,15 +165,19 @@ function Preview({ asset }: { asset: LibraryAsset }) {
 
 function ImagePreview({ asset }: { asset: LibraryAsset }) {
   return (
-    <div className="aspect-video overflow-hidden bg-secondary">
-      <img src={asset.url ?? ""} alt={asset.taskTitle} className="size-full object-cover" />
+    <div className="aspect-video overflow-hidden rounded-t-xl bg-zinc-900">
+      <img
+        src={asset.url ?? ""}
+        alt={asset.taskTitle}
+        className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
+      />
     </div>
   );
 }
 
 function AudioPreview({ asset }: { asset: LibraryAsset }) {
   return (
-    <div className="flex aspect-video items-center justify-center bg-[#07111f] p-4">
+    <div className="flex aspect-video items-center justify-center rounded-t-xl bg-zinc-950 p-4">
       <audio src={asset.url ?? ""} controls className="w-full" />
     </div>
   );
@@ -168,8 +187,8 @@ function Placeholder({ asset }: { asset: LibraryAsset }) {
   const Icon = typeIcon[asset.type] ?? FileText;
 
   return (
-    <div className="flex aspect-video items-center justify-center bg-gradient-to-br from-blue-500/[0.12] to-violet-500/[0.08]">
-      <Icon className="size-9 text-blue-200" />
+    <div className="flex aspect-video items-center justify-center rounded-t-xl bg-zinc-900">
+      <Icon className="size-9 text-zinc-400 transition-colors group-hover:text-cyan-400" />
     </div>
   );
 }
@@ -177,7 +196,7 @@ function Placeholder({ asset }: { asset: LibraryAsset }) {
 function EmptyAssets({ text }: { text: string }) {
   return (
     <Card>
-      <CardContent className="p-5 text-sm text-muted-foreground">{text}</CardContent>
+      <EmptyState icon={Inbox} description={text} />
     </Card>
   );
 }

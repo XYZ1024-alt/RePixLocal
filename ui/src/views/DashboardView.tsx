@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   CheckCircle2,
@@ -6,15 +6,18 @@ import {
   Plus,
   RefreshCw,
   ShieldCheck,
+  Sparkles,
   Wallet,
   type LucideIcon
 } from "lucide-react";
 import { getProviderBalances } from "@/api";
 import { BarChart, DonutChart } from "@/components/charts";
+import { EmptyState } from "@/components/EmptyState";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import { useLocale, useTranslations } from "@/i18n/context";
 import type { DashboardData, ProviderBalance, ProviderBalanceAccount } from "@/types";
 
@@ -30,18 +33,24 @@ const statusVariant: Record<string, "success" | "warning" | "destructive" | "sec
 };
 
 const statusColor: Record<string, string> = {
-  COMPLETED: "#10b981",
+  COMPLETED: "#ffffff",
   RUNNING: "#22d3ee",
-  FAILED: "#ef4444",
-  PENDING: "#3b82f6",
-  PAUSED: "#64748b",
-  CANCELLED: "#475569"
+  FAILED: "#dc2626",
+  PENDING: "#71717a",
+  PAUSED: "#71717a",
+  CANCELLED: "#52525b"
+};
+
+const meterClass: Record<ProviderBalance["status"], string> = {
+  available: "bg-cyan-400",
+  unsupported: "bg-zinc-600",
+  not_configured: "bg-zinc-600",
+  error: "bg-red-600"
 };
 
 type StatCard = {
   label: string;
   value: string | number;
-  accent: string;
   icon: LucideIcon;
   note: string;
 };
@@ -109,7 +118,19 @@ export function DashboardView(props: {
     return (
       <>
         <PageHeader title={t("title")} description={t("description")} />
-        <div className="px-4 pb-6 pt-3 text-sm text-muted-foreground lg:px-6">{t("noTasks")}</div>
+        <div className="px-4 pb-6 pt-3 lg:px-6">
+          <EmptyState
+            icon={Sparkles}
+            title={t("title")}
+            description={t("noTasks")}
+            action={
+              <Button size="sm" onClick={props.onNewTask}>
+                <Plus />
+                {t("newTask")}
+              </Button>
+            }
+          />
+        </div>
       </>
     );
   }
@@ -144,7 +165,7 @@ export function DashboardView(props: {
     .map(([status, value]) => ({
       label: tStatus(status),
       value,
-      color: statusColor[status] ?? "#64748b"
+      color: statusColor[status] ?? "#71717a"
     }));
   const trend = props.data.trend.map((point) => ({
     label: new Intl.DateTimeFormat(locale, { weekday: "short" }).format(new Date(point.date)),
@@ -163,7 +184,7 @@ export function DashboardView(props: {
           </Button>
         }
       />
-      <div className="flex flex-col gap-5 px-4 pb-6 pt-3 lg:px-6">
+      <div className="flex flex-col gap-5 px-4 pb-6 pt-3 animate-fade-in lg:px-6">
         <StatGrid cards={cards} />
         <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
           <TrendPanel title={t("trendTitle")} rangeLabel={t("sevenDays")} data={trend} />
@@ -192,28 +213,24 @@ function getStatCards(stats: DashboardData["stats"], t: (key: string, values?: R
       label: t("totalTasks"),
       value: stats.total_tasks,
       icon: Activity,
-      accent: "text-cyan-300",
       note: t("assetsReady", { count: stats.assets_ready })
     },
     {
       label: t("running"),
       value: stats.running,
       icon: Clock3,
-      accent: "text-violet-300",
       note: t("livePipelines")
     },
     {
       label: t("completed"),
       value: stats.completed,
       icon: CheckCircle2,
-      accent: "text-blue-300",
       note: t("completedRuns")
     },
     {
       label: t("successRate"),
       value: `${stats.success_rate}%`,
       icon: ShieldCheck,
-      accent: "text-emerald-300",
       note: t("qualitySignal")
     }
   ];
@@ -233,18 +250,20 @@ function MetricCard({ card }: { card: StatCard }) {
   const Icon = card.icon;
 
   return (
-    <Card className="overflow-hidden bg-gradient-to-br from-white/[0.06] to-transparent">
+    <Card interactive className="overflow-hidden">
       <CardContent className="p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-col gap-3">
-            <span className="text-xs font-semibold text-muted-foreground">{card.label}</span>
-            <span className="text-3xl font-semibold tabular-nums">{card.value}</span>
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {card.label}
+            </span>
+            <span className="text-3xl font-bold tabular-nums tracking-tight">{card.value}</span>
           </div>
-          <span className="rounded-md bg-white/[0.05] p-2 ring-1 ring-white/10">
-            <Icon className={`size-4 ${card.accent}`} />
+          <span className="rounded-lg bg-cyan-950/20 p-2.5 ring-1 ring-inset ring-cyan-500/30 shadow-inner">
+            <Icon className="size-5 text-cyan-400" />
           </span>
         </div>
-        <p className="mt-4 text-xs text-muted-foreground">{card.note}</p>
+        <p className="mt-4 text-xs font-medium text-muted-foreground">{card.note}</p>
       </CardContent>
     </Card>
   );
@@ -260,7 +279,7 @@ function TrendPanel({
   data: { label: string; value: number }[];
 }) {
   return (
-    <Card>
+    <Card className="overflow-hidden">
       <CardHeader className="flex-row items-center justify-between pb-3">
         <CardTitle>{title}</CardTitle>
         <Badge variant="outline">{rangeLabel}</Badge>
@@ -292,7 +311,7 @@ function StatusPanel({
         {slices.length > 0 ? (
           <DonutChart slices={slices} centerLabel={centerLabel} />
         ) : (
-          <p className="text-sm text-muted-foreground">{emptyText}</p>
+          <EmptyState description={emptyText} />
         )}
       </CardContent>
     </Card>
@@ -309,7 +328,7 @@ function QueuePanel({
   rows: QueueRow[];
 }) {
   return (
-    <Card>
+    <Card className="overflow-hidden">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
@@ -324,16 +343,28 @@ function QueueTable({ rows }: { rows: QueueRow[] }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[560px] text-sm">
-        <tbody className="divide-y divide-white/[0.06]">
+        <tbody className="divide-y divide-zinc-800">
           {rows.map((row) => (
-            <tr key={row.id} className="text-slate-300">
-              <td className="px-5 py-3 font-medium text-foreground">{row.title}</td>
-              <td className="px-4 py-3 text-muted-foreground">{row.stage}</td>
-              <td className="w-40 px-4 py-3">
-                <ProgressBar value={row.progress} />
+            <tr
+              key={row.id}
+              className="group text-zinc-300 transition-colors hover:bg-cyan-950/20"
+            >
+              <td className="px-5 py-3.5 font-medium text-foreground">{row.title}</td>
+              <td className="px-4 py-3.5 text-muted-foreground">{row.stage}</td>
+              <td className="w-44 px-4 py-3.5">
+                <ProgressBar value={row.progress} animated={row.status === "RUNNING"} />
               </td>
-              <td className="px-5 py-3 text-right">
-                <Badge variant={statusVariant[row.status] ?? "secondary"}>{row.statusLabel}</Badge>
+              <td className="px-5 py-3.5 text-right">
+                <Badge
+                  variant={statusVariant[row.status] ?? "secondary"}
+                  className={
+                    row.status === "RUNNING"
+                      ? "border-cyan-500/30 bg-cyan-950/30 text-cyan-300 hover:bg-cyan-950/50"
+                      : undefined
+                  }
+                >
+                  {row.statusLabel}
+                </Badge>
               </td>
             </tr>
           ))}
@@ -351,12 +382,23 @@ function BalancePanel({
   onRefresh: () => void;
 }) {
   const t = useTranslations("dashboard");
+  const rows = useMemo(() => {
+    if (!state.data) return [];
+    const values = state.data.map((b) => numericBalance(b.accounts)).filter((v) => v > 0);
+    const max = Math.max(1, ...values);
+    return state.data.map((balance) => ({
+      balance,
+      value: (numericBalance(balance.accounts) / max) * 100
+    }));
+  }, [state.data]);
 
   return (
-    <Card>
+    <Card className="overflow-hidden">
       <CardHeader className="flex-row items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Wallet className="size-4 text-emerald-300" />
+          <span className="flex size-8 items-center justify-center rounded-lg bg-cyan-950/20 ring-1 ring-inset ring-cyan-500/30">
+            <Wallet className="size-4 text-cyan-400" />
+          </span>
           <CardTitle>{t("balanceTitle")}</CardTitle>
         </div>
         <Button
@@ -368,23 +410,27 @@ function BalancePanel({
           type="button"
           variant="outline"
         >
-          <RefreshCw className={state.loading ? "animate-spin" : ""} />
+          <RefreshCw className={cn("transition-transform", state.loading && "animate-spin")} />
         </Button>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {state.loading && !state.data ? (
-          <p className="text-sm text-muted-foreground">{t("balanceLoading")}</p>
-        ) : null}
+      <CardContent className="flex flex-col gap-4">
+        {state.loading && !state.data ? <BalanceSkeleton /> : null}
         {state.error ? (
-          <p className="break-words text-sm text-red-300">
-            {t("balanceError", { message: state.error })}
-          </p>
+          <div className="rounded-lg border border-red-900/50 bg-red-950/40 p-3">
+            <p className="break-words text-xs leading-relaxed text-red-200">
+              {t("balanceError", { message: state.error })}
+            </p>
+          </div>
         ) : null}
         {state.data ? (
-          <div className="grid gap-3">
-            {state.data.map((balance) => (
-              <ProviderBalanceRow key={balance.provider} balance={balance} />
-            ))}
+          <div className="flex flex-col gap-4">
+            {rows.length > 0 ? (
+              rows.map(({ balance, value }) => (
+                <BalanceMeter key={balance.provider} balance={balance} relativeValue={value} />
+              ))
+            ) : (
+              <EmptyRow text={t("noUsage")} />
+            )}
           </div>
         ) : null}
       </CardContent>
@@ -392,28 +438,41 @@ function BalancePanel({
   );
 }
 
-function ProviderBalanceRow({ balance }: { balance: ProviderBalance }) {
+function BalanceMeter({
+  balance,
+  relativeValue
+}: {
+  balance: ProviderBalance;
+  relativeValue: number;
+}) {
   const { locale } = useLocale();
   const t = useTranslations("dashboard");
   const checkedAt = formatCheckedAt(balance.checked_at, locale);
   const message = providerBalanceMessage(balance, t);
 
   return (
-    <div className="rounded-md border border-white/[0.06] bg-white/[0.03] p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-semibold">{providerBalanceLabel(balance.provider)}</span>
-        <Badge variant={balanceStatusVariant[balance.status]}>
-          {t(`balanceStatus.${balance.status}`)}
-        </Badge>
+    <div className="group flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-foreground">{providerBalanceLabel(balance.provider)}</span>
+          <Badge variant={balanceStatusVariant[balance.status]}>
+            {t(`balanceStatus.${balance.status}`)}
+          </Badge>
+        </div>
+        <span className="text-muted-foreground">{checkedAt}</span>
       </div>
-      <p className="mt-1 text-xs text-muted-foreground">
-        {t("balanceCheckedAt", { time: checkedAt })}
-      </p>
-      {message ? (
-        <p className="mt-2 break-words text-xs text-muted-foreground">{message}</p>
-      ) : null}
+      <div className="h-2 overflow-hidden rounded-full bg-zinc-950 ring-1 ring-inset ring-zinc-800">
+        <div
+          className={cn(
+            "h-full rounded-full transition-all duration-700",
+            meterClass[balance.status]
+          )}
+          style={{ width: `${Math.max(relativeValue, MIN_PROGRESS)}%` }}
+        />
+      </div>
+      {message ? <p className="text-xs text-muted-foreground">{message}</p> : null}
       {balance.accounts.length > 0 ? (
-        <div className="mt-3 grid gap-3">
+        <div className="mt-1 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {balance.accounts.map((account) => (
             <BalanceAccount key={`${balance.provider}-${account.currency}`} info={account} />
           ))}
@@ -427,10 +486,10 @@ function BalanceAccount({ info }: { info: ProviderBalanceAccount }) {
   const t = useTranslations("dashboard");
 
   return (
-    <div className="rounded-md border border-white/[0.06] bg-black/10 p-3">
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 transition-colors hover:border-cyan-500/50 hover:bg-cyan-950/20">
       <div className="flex items-center justify-between gap-3">
         <span className="text-xs text-muted-foreground">{t("balanceCurrency")}</span>
-        <span className="text-sm font-semibold">{info.currency}</span>
+        <span className="text-xs font-semibold">{info.currency}</span>
       </div>
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         <BalanceAmount label={t("balanceTotal")} value={info.total_balance} />
@@ -448,8 +507,25 @@ function BalanceAccount({ info }: { info: ProviderBalanceAccount }) {
 function BalanceAmount({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className="mt-1 truncate text-sm font-semibold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+function BalanceSkeleton() {
+  return (
+    <div className="flex flex-col gap-4">
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div key={i} className="flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="h-4 w-24 rounded bg-zinc-800/60 animate-pulse" />
+            <span className="h-4 w-16 rounded bg-zinc-800/60 animate-pulse" />
+          </div>
+          <div className="h-2 rounded-full bg-zinc-800/60 animate-pulse" />
+          <div className="h-3 w-32 rounded bg-zinc-800/60 animate-pulse" />
+        </div>
+      ))}
     </div>
   );
 }
@@ -466,7 +542,7 @@ function UsagePanel({
   const max = Math.max(1, ...rows.map((row) => row.quantity));
 
   return (
-    <Card>
+    <Card className="overflow-hidden">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
@@ -485,29 +561,43 @@ function UsageMeter({ row, max }: { row: UsageRow; max: number }) {
   const value = Math.max((row.quantity / max) * 100, MIN_PROGRESS);
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="group flex flex-col gap-2">
       <div className="flex items-center justify-between gap-3 text-xs">
-        <span className="font-semibold text-slate-200">{row.provider}</span>
+        <span className="font-semibold text-foreground">{row.provider}</span>
         <span className="text-muted-foreground">{row.meta}</span>
       </div>
-      <ProgressBar value={value} />
+      <div className="relative h-2 overflow-hidden rounded-full bg-zinc-950 ring-1 ring-inset ring-zinc-800">
+        <div
+          className="h-full rounded-full bg-cyan-400 transition-all duration-700 group-hover:bg-cyan-300"
+          style={{ width: `${Math.min(value, 100)}%` }}
+        />
+      </div>
     </div>
   );
 }
 
-function ProgressBar({ value }: { value: number }) {
+function ProgressBar({ value, animated }: { value: number; animated?: boolean }) {
+  const width = Math.min(value, 100);
+
   return (
-    <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
+    <div className="relative h-2 overflow-hidden rounded-full bg-zinc-950 ring-1 ring-inset ring-zinc-800">
       <div
-        className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400"
-        style={{ width: `${Math.min(value, 100)}%` }}
+        className={cn(
+          "h-full rounded-full transition-all duration-500",
+          animated ? "bg-cyan-400 animate-pulse-glow shadow-glow" : "bg-cyan-400"
+        )}
+        style={{ width: `${width}%` }}
       />
     </div>
   );
 }
 
 function EmptyRow({ text }: { text: string }) {
-  return <p className="px-5 py-4 text-sm text-muted-foreground">{text}</p>;
+  return (
+    <div className="px-5 py-6">
+      <p className="text-sm text-muted-foreground">{text}</p>
+    </div>
+  );
 }
 
 function providerBalanceLabel(provider: string) {
@@ -547,4 +637,14 @@ function formatCheckedAt(value: string, locale: string) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+function parseNumeric(value: string): number {
+  const cleaned = value.replace(/[^\d.]/g, "");
+  const parsed = Number.parseFloat(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function numericBalance(accounts: ProviderBalanceAccount[]): number {
+  return accounts.reduce((sum, account) => sum + parseNumeric(account.total_balance), 0);
 }

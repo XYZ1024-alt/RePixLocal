@@ -105,7 +105,7 @@ function ErrorBanner(props: { message: string; onDismiss: () => void }) {
   const t = useTranslations("shell");
 
   return (
-    <div className="mx-4 mt-3 flex items-center gap-2 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200 lg:mx-6">
+    <div className="mx-4 mt-3 flex items-center gap-2 rounded-xl border border-red-900/50 bg-red-950/40 px-3 py-2 text-sm text-red-200 lg:mx-6">
       <AlertTriangle size={16} />
       <span className="flex-1">{props.message}</span>
       <button className="text-xs text-red-100/80 hover:text-red-50" onClick={props.onDismiss} type="button">

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Inbox, XCircle } from "lucide-react";
 import { cancelTask, getRun, getRunCosts, listAssets, resumeTask } from "@/api";
 import { ConsoleLive, type LogSnapshot, type StageSnapshot } from "@/components/ConsoleLive";
+import { EmptyState } from "@/components/EmptyState";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useTranslations } from "@/i18n/context";
 import { toLibraryAssets, type LibraryAsset } from "@/lib/library";
 import type { CostSummary, RunDetail } from "@/types";
@@ -83,7 +85,7 @@ export function ConsoleDetailView(props: {
         <PageHeader title={t("title")} description={t("notStarted")} />
         <div className="px-4 pb-6 lg:px-6">
           <Card>
-            <CardContent className="py-8 text-sm text-muted-foreground">{t("empty")}</CardContent>
+            <EmptyState icon={Inbox} description={t("empty")} />
           </Card>
         </div>
       </>
@@ -99,9 +101,7 @@ export function ConsoleDetailView(props: {
           actions={<BackButton label={t("backToList")} onBack={props.onBack} />}
         />
         <div className="px-4 pb-6 lg:px-6">
-          <Card>
-            <CardContent className="py-8 text-sm text-muted-foreground">{t("noRuns")}</CardContent>
-          </Card>
+          <ConsoleDetailSkeleton />
         </div>
       </>
     );
@@ -116,10 +116,13 @@ export function ConsoleDetailView(props: {
           actions={<BackButton label={t("backToList")} onBack={props.onBack} />}
         />
         <div className="px-4 pb-6 lg:px-6">
-          <Card>
-            <CardContent className="py-8 text-sm text-muted-foreground">
-              {error ?? t("empty")}
-            </CardContent>
+          <Card className="border-red-900/50 bg-red-950/40">
+            <div className="flex flex-col items-center justify-center gap-3 px-5 py-10 text-center animate-fade-in">
+              <XCircle className="size-12 text-red-400" />
+              <p className="max-w-xs text-xs leading-relaxed text-red-200">
+                {error ?? t("empty")}
+              </p>
+            </div>
           </Card>
         </div>
       </>
@@ -181,6 +184,7 @@ export function ConsoleDetailView(props: {
               <Button
                 disabled={actionBusy}
                 onClick={() => void handleCancel()}
+                size="sm"
                 type="button"
                 variant="outline"
               >
@@ -188,7 +192,12 @@ export function ConsoleDetailView(props: {
               </Button>
             ) : null}
             {canResume ? (
-              <Button disabled={actionBusy} onClick={() => void handleResume()} type="button">
+              <Button
+                disabled={actionBusy}
+                onClick={() => void handleResume()}
+                size="sm"
+                type="button"
+              >
                 {t("resumeRun")}
               </Button>
             ) : null}
@@ -214,9 +223,46 @@ export function ConsoleDetailView(props: {
   );
 }
 
+function ConsoleDetailSkeleton() {
+  return (
+    <div className="flex flex-col gap-5 animate-fade-in">
+      <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+        <Card>
+          <CardContent className="flex flex-col gap-3 p-5">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <Skeleton key={index} className="h-16 w-full rounded-lg" />
+            ))}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="h-[520px] p-5">
+            <Skeleton className="h-full w-full rounded-lg" />
+          </CardContent>
+        </Card>
+      </div>
+      <Card>
+        <CardContent className="flex flex-col gap-3 p-5">
+          <Skeleton className="h-5 w-32" />
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <Skeleton key={index} className="h-20 w-full rounded-lg" />
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function BackButton({ label, onBack }: { label: string; onBack: () => void }) {
   return (
-    <Button className="gap-1.5 text-muted-foreground" onClick={onBack} type="button" variant="ghost">
+    <Button
+      className="gap-1.5 text-zinc-400 hover:text-cyan-300"
+      onClick={onBack}
+      size="sm"
+      type="button"
+      variant="ghost"
+    >
       <ArrowLeft className="size-4" />
       {label}
     </Button>

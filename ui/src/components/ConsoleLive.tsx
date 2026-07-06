@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { CheckCircle2, Circle, Loader2, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Circle,
+  Loader2,
+  XCircle
+} from "lucide-react";
 import { getRun, getRunCosts, listAssets, revealAsset } from "@/api";
 import { AssetSections } from "@/components/AssetSections";
 import { Badge } from "@/components/ui/badge";
@@ -47,23 +53,38 @@ const stageIcon = {
 } as const;
 
 const stageColor = {
-  COMPLETED: "text-emerald-300",
-  RUNNING: "text-blue-300",
-  PENDING: "text-slate-500",
-  FAILED: "text-red-300",
-  CANCELLED: "text-red-300"
+  COMPLETED: "text-white",
+  RUNNING: "text-cyan-300",
+  PENDING: "text-zinc-400",
+  FAILED: "text-red-200",
+  CANCELLED: "text-red-200"
 } as const;
 
-const logColor: Record<string, string> = {
-  INFO: "text-emerald-300",
-  WARN: "text-amber-300",
-  ERROR: "text-red-300",
-  DEBUG: "text-blue-300"
+const stageBarColor: Record<StageStatus, string> = {
+  COMPLETED: "bg-white",
+  RUNNING: "bg-cyan-400 animate-pulse",
+  PENDING: "bg-zinc-500",
+  FAILED: "bg-red-400",
+  CANCELLED: "bg-red-400"
 };
 
-const runBadge: Record<RunStatus, "success" | "warning" | "destructive" | "secondary"> = {
+const logColor: Record<string, string> = {
+  INFO: "text-zinc-300",
+  WARN: "text-zinc-300",
+  ERROR: "text-red-200",
+  DEBUG: "text-zinc-400"
+};
+
+const logBg: Record<string, string> = {
+  INFO: "bg-zinc-800",
+  WARN: "bg-zinc-800",
+  ERROR: "bg-red-950/40",
+  DEBUG: "bg-zinc-900"
+};
+
+const runBadge: Record<RunStatus, "default" | "success" | "warning" | "destructive" | "secondary"> = {
   COMPLETED: "success",
-  RUNNING: "warning",
+  RUNNING: "default",
   FAILED: "destructive",
   CANCELLED: "destructive",
   PENDING: "secondary"
@@ -73,7 +94,7 @@ export function ConsoleLive(props: ConsoleLiveProps) {
   const live = useConsoleLiveData(props);
 
   return (
-    <div className="flex flex-1 flex-col gap-5 px-4 pb-6 pt-3 lg:px-6">
+    <div className="flex flex-1 flex-col gap-5 px-4 pb-6 pt-3 lg:px-6 animate-fade-in">
       <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
         <StageTimeline status={live.status} stages={live.stages} />
         <LogPanel connected={live.connected} logs={live.logs} status={live.status} />
@@ -367,18 +388,27 @@ function CostPanel({ summary, error }: { summary: CostSummary; error: string | n
       <CardHeader className="flex-row items-center justify-between gap-3">
         <CardTitle>{t("costsTitle")}</CardTitle>
         <div className="flex items-center gap-2">
-          {summary.incomplete ? <Badge variant="warning">{t("costIncomplete")}</Badge> : null}
-          <span className="text-lg font-semibold">{formatUsd(summary.total_cost_usd)}</span>
+          {summary.incomplete ? (
+            <Badge variant="warning">
+              <AlertTriangle className="size-3" />
+              {t("costIncomplete")}
+            </Badge>
+          ) : null}
+          <span className="text-lg font-semibold tabular-nums">{formatUsd(summary.total_cost_usd)}</span>
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        {error ? <p className="text-sm text-red-300">{error}</p> : null}
+        {error ? <p className="text-sm text-red-200">{error}</p> : null}
         {summary.providers.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t("noCosts")}</p>
+          <p className="text-sm text-zinc-400">{t("noCosts")}</p>
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {summary.providers.map((row) => (
-              <ProviderCostRow key={row.provider} row={row} />
+              <ProviderCostRow
+                key={row.provider}
+                row={row}
+                total={summary.total_cost_usd}
+              />
             ))}
           </div>
         )}
@@ -387,16 +417,29 @@ function CostPanel({ summary, error }: { summary: CostSummary; error: string | n
   );
 }
 
-function ProviderCostRow({ row }: { row: CostSummary["providers"][number] }) {
+function ProviderCostRow({
+  row,
+  total
+}: {
+  row: CostSummary["providers"][number];
+  total: number;
+}) {
   const t = useTranslations("console");
+  const ratio = total > 0 ? Math.max(0, Math.min(1, row.cost_usd / total)) : 0;
 
   return (
-    <div className="rounded-lg border border-white/[0.06] bg-white/[0.03] p-3">
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 transition-all duration-200 hover:border-cyan-500/40">
       <div className="flex items-center justify-between gap-3">
         <span className="truncate text-sm font-semibold">{row.provider}</span>
-        <span className="text-sm font-semibold">{formatUsd(row.cost_usd)}</span>
+        <span className="text-sm font-semibold tabular-nums">{formatUsd(row.cost_usd)}</span>
       </div>
-      <p className="mt-1 text-xs text-muted-foreground">
+      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-950">
+        <div
+          className="h-full rounded-full bg-cyan-400 transition-all duration-500"
+          style={{ width: `${ratio * 100}%` }}
+        />
+      </div>
+      <p className="mt-2 text-xs text-zinc-500">
         {t("costUsageMeta", {
           quantity: formatQuantity(row.quantity),
           unit: row.unit,
@@ -404,12 +447,12 @@ function ProviderCostRow({ row }: { row: CostSummary["providers"][number] }) {
         })}
       </p>
       {row.unknown_cost_count > 0 ? (
-        <p className="mt-1 text-xs text-amber-300">
+        <p className="mt-1 text-xs text-zinc-300">
           {t("unknownCostCalls", { count: row.unknown_cost_count })}
         </p>
       ) : null}
       {row.failed_calls > 0 ? (
-        <p className="mt-1 text-xs text-red-300">{t("failedCostCalls", { count: row.failed_calls })}</p>
+        <p className="mt-1 text-xs text-red-200">{t("failedCostCalls", { count: row.failed_calls })}</p>
       ) : null}
     </div>
   );
@@ -428,7 +471,7 @@ function FinalOutputPanel({
   if (status !== "COMPLETED" || !finalAsset) return null;
 
   return (
-    <Card className="overflow-hidden border-emerald-400/20 bg-emerald-500/[0.04]">
+    <Card>
       <CardHeader className="flex-row items-center justify-between gap-3">
         <CardTitle>{t("finalOutputTitle")}</CardTitle>
         <Button
@@ -441,15 +484,15 @@ function FinalOutputPanel({
         </Button>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <p className="text-sm text-muted-foreground">{t("finalOutputHint")}</p>
+        <p className="text-sm text-zinc-400">{t("finalOutputHint")}</p>
         {finalAsset.url ? (
           <video
             src={finalAsset.url}
             controls
-            className="aspect-video w-full rounded-md bg-black object-contain"
+            className="aspect-video w-full rounded-lg bg-black object-contain shadow-card"
           />
         ) : (
-          <p className="text-sm text-amber-300">{finalAsset.storageKey}</p>
+          <p className="text-sm text-zinc-300">{finalAsset.storageKey}</p>
         )}
       </CardContent>
     </Card>
@@ -473,7 +516,7 @@ function TaskAssets({
 }) {
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold">{title}</h2>
+      <h2 className="text-sm font-semibold text-white">{title}</h2>
       <AssetSections
         assets={assets}
         emptyText={emptyText}
@@ -504,8 +547,8 @@ function StageTimeline({ status, stages }: { status: RunStatus; stages: StageSna
         <CardTitle>{t("stages")}</CardTitle>
         <Badge variant={runBadge[status]}>{tStatus(status)}</Badge>
       </CardHeader>
-      <CardContent className="relative flex flex-col gap-3">
-        <span className="absolute bottom-6 left-8 top-0 w-px bg-white/10" />
+      <CardContent className="relative flex flex-col gap-3 p-5">
+        <span className="absolute bottom-6 left-14 top-5 w-px bg-zinc-800" />
         {stages.map((stage, index) => (
           <StageRow key={stage.type} index={index + 1} stage={stage} />
         ))}
@@ -519,22 +562,35 @@ function StageRow({ index, stage }: { index: number; stage: StageSnapshot }) {
   const Icon = stageIcon[stage.status] ?? Circle;
 
   return (
-    <div className="relative flex gap-4 rounded-lg border border-white/[0.06] bg-white/[0.03] p-4">
-      <span className="z-10 flex size-9 shrink-0 items-center justify-center rounded-full bg-[#0b1625] ring-1 ring-white/10">
+    <div className="relative flex gap-4 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 p-4 transition-all duration-200 hover:border-zinc-700">
+      <span
+        className={cn(
+          "absolute inset-y-0 left-0 w-1 rounded-l-lg",
+          stageBarColor[stage.status] ?? "bg-zinc-500"
+        )}
+      />
+      <span
+        className={cn(
+          "z-10 flex size-10 shrink-0 items-center justify-center rounded-full bg-zinc-900 ring-1 ring-zinc-800",
+          stage.status === "RUNNING" && "bg-cyan-950/30 ring-cyan-500/30",
+          stage.status === "COMPLETED" && "bg-zinc-800 ring-zinc-700",
+          (stage.status === "FAILED" || stage.status === "CANCELLED") && "bg-red-950/40 ring-red-900/50"
+        )}
+      >
         <Icon
           className={cn(
             "size-5",
-            stageColor[stage.status] ?? "text-slate-500",
+            stageColor[stage.status] ?? "text-zinc-400",
             stage.status === "RUNNING" && "animate-spin"
           )}
         />
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="truncate text-sm font-semibold">{stage.label}</h3>
-          <span className="text-xs text-muted-foreground">0{index}</span>
+          <h3 className="truncate text-sm font-semibold text-white">{stage.label}</h3>
+          <span className="text-xs text-zinc-400 tabular-nums">0{index}</span>
         </div>
-        <p className="text-xs text-muted-foreground">{getStageText(stage.status, t)}</p>
+        <p className="text-xs text-zinc-400">{getStageText(stage.status, t)}</p>
       </div>
     </div>
   );
@@ -558,9 +614,9 @@ function LogPanel({
         <ConnectionState connected={connected} status={status} />
       </CardHeader>
       <CardContent className="flex-1">
-        <div className="h-full rounded-lg border border-white/[0.06] bg-[#06101d] p-4 font-mono text-xs">
+        <div className="flex h-full flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-4 font-mono text-xs shadow-inner">
           {logs.length === 0 ? (
-            <span className="text-muted-foreground">{t("noLogs")}</span>
+            <span className="text-zinc-400">{t("noLogs")}</span>
           ) : (
             <div className="flex flex-col gap-2">
               {logs.map((log, index) => (
@@ -576,11 +632,25 @@ function LogPanel({
 
 function LogLine({ log }: { log: LogSnapshot }) {
   return (
-    <div className="grid grid-cols-[76px_52px_1fr] gap-3">
-      <span className="text-muted-foreground">[{log.ts}]</span>
-      <span className={cn("font-semibold", logColor[log.level] ?? "text-slate-300")}>{log.level}</span>
-      <span className="text-slate-200">{log.message}</span>
+    <div className="grid grid-cols-[72px_60px_1fr] gap-3 animate-fade-in">
+      <span className="text-zinc-400">[{log.ts}]</span>
+      <LogLevelBadge level={log.level} />
+      <span className="text-zinc-200">{log.message}</span>
     </div>
+  );
+}
+
+function LogLevelBadge({ level }: { level: string }) {
+  return (
+    <span
+      className={cn(
+        "flex h-5 w-fit items-center justify-center rounded px-1.5 text-[10px] font-bold uppercase tracking-wide",
+        logBg[level] ?? "bg-zinc-900",
+        logColor[level] ?? "text-zinc-300"
+      )}
+    >
+      {level}
+    </span>
   );
 }
 
@@ -589,11 +659,19 @@ function ConnectionState({ connected, status }: { connected: boolean; status: Ru
   const live = status === "RUNNING" || status === "PENDING";
 
   return (
-    <span className="flex items-center gap-2 text-xs text-muted-foreground">
+    <span
+      className={cn(
+        "flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+        connected && live
+          ? "border-cyan-500/30 bg-cyan-950/30 text-cyan-300"
+          : "border-zinc-800 bg-zinc-900 text-zinc-400",
+        !connected && "border-red-900/50 bg-red-950/40 text-red-200"
+      )}
+    >
       <span
         className={cn(
           "size-2 rounded-full",
-          connected && live ? "animate-pulse bg-emerald-400" : "bg-slate-500",
+          connected && live ? "animate-pulse bg-cyan-400 shadow-glow" : "bg-zinc-500",
           !connected && "bg-red-400"
         )}
       />

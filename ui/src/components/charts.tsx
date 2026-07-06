@@ -1,3 +1,5 @@
+import { cn } from "@/lib/utils";
+
 const MIN_VISIBLE_BAR = 4;
 const GRID_LINES = 4;
 
@@ -27,22 +29,32 @@ export function DonutChart({
   return (
     <div className="flex items-center gap-7">
       <div
-        className="relative shrink-0 rounded-full shadow-[0_0_32px_rgba(37,99,235,0.18)]"
+        className="relative shrink-0 rounded-full ring-1 ring-inset ring-zinc-800 transition-shadow hover:ring-cyan-500/30"
         style={{ width: size, height: size, background: `conic-gradient(${stops})` }}
       >
-        <div className="absolute inset-[23%] rounded-full bg-[#0b1726] ring-1 ring-white/[0.08]" />
+        <div className="absolute inset-[23%] rounded-full bg-zinc-950 ring-1 ring-inset ring-zinc-800" />
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="text-center">
-            <div className="text-2xl font-semibold tabular-nums">{total}</div>
-            <div className="text-[10px] uppercase text-muted-foreground">{centerLabel}</div>
+            <div className="text-3xl font-bold tabular-nums tracking-tight text-white">{total}</div>
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {centerLabel}
+            </div>
           </div>
         </div>
       </div>
       <ul className="flex min-w-36 flex-col gap-2.5 text-xs">
         {slices.map((slice) => (
-          <li key={slice.label} className="flex items-center gap-2">
-            <span className="size-2.5 shrink-0 rounded-full" style={{ background: slice.color }} />
-            <span className="text-muted-foreground">{slice.label}</span>
+          <li
+            key={slice.label}
+            className="group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-zinc-900"
+          >
+            <span
+              className="size-2.5 shrink-0 rounded-full ring-2 ring-white/[0.08] transition-shadow group-hover:ring-cyan-400/50"
+              style={{ background: slice.color }}
+            />
+            <span className="text-muted-foreground transition-colors group-hover:text-cyan-300">
+              {slice.label}
+            </span>
             <span className="ml-auto font-semibold tabular-nums">{slice.value}</span>
           </li>
         ))}
@@ -55,19 +67,25 @@ export function BarChart({ data }: { data: TrendPoint[] }) {
   const max = Math.max(1, ...data.map((point) => point.value));
 
   return (
-    <div className="relative h-52 overflow-hidden rounded-md border border-white/5 bg-[#0a1523] px-4 pb-3 pt-6">
+    <div className="relative h-52 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 px-4 pb-3 pt-6 shadow-inner">
       <ChartGrid />
       <div className="relative z-10 flex h-full items-end gap-3">
-        {data.map((point) => (
+        {data.map((point, index) => (
           <div key={point.label} className="flex flex-1 flex-col items-center gap-2">
-            <span className="text-[10px] font-medium tabular-nums text-muted-foreground">{point.value}</span>
+            <span className="text-[10px] font-semibold tabular-nums text-foreground">{point.value}</span>
             <div className="flex h-36 w-full items-end">
               <div
-                className="w-full rounded-t-sm bg-cyan-400 shadow-[0_0_18px_rgba(34,211,238,0.36)]"
-                style={{ height: `${getBarHeight(point.value, max)}%` }}
+                className={cn(
+                  "w-full rounded-t-lg bg-cyan-400 transition-all duration-700 hover:bg-cyan-300 hover:shadow-glow",
+                  point.value > 0 && "animate-slide-up"
+                )}
+                style={{
+                  height: `${getBarHeight(point.value, max)}%`,
+                  animationDelay: `${index * 40}ms`
+                }}
               />
             </div>
-            <span className="text-[10px] text-muted-foreground">{point.label}</span>
+            <span className="text-[10px] font-medium text-muted-foreground">{point.label}</span>
           </div>
         ))}
       </div>
@@ -81,7 +99,7 @@ function ChartGrid() {
       {Array.from({ length: GRID_LINES }).map((_, index) => (
         <span
           key={index}
-          className="absolute left-0 w-full border-t border-white/[0.06]"
+          className="absolute left-0 w-full border-t border-white/[0.04]"
           style={{ top: `${(index / (GRID_LINES - 1)) * 100}%` }}
         />
       ))}

@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import {
   AlertCircle,
+  AudioLines,
   CheckCircle2,
   Eye,
   EyeOff,
+  Film,
   Key,
   RefreshCw,
   Save,
+  Terminal,
   Wrench
 } from "lucide-react";
 import {
@@ -20,6 +23,7 @@ import {
   updateSettings
 } from "@/api";
 import { PageHeader } from "@/components/PageHeader";
+import { cn } from "@/lib/utils";
 import {
   Accordion,
   AccordionContent,
@@ -90,8 +94,18 @@ export function SettingsView(props: {
       <div className="container mx-auto max-w-5xl px-4 pb-8 pt-2 lg:px-6">
         <Tabs defaultValue="providers" className="space-y-6">
           <TabsList>
-            <TabsTrigger value="providers">{t("providerKeys")}</TabsTrigger>
-            <TabsTrigger value="system">{t("systemSettings")}</TabsTrigger>
+            <TabsTrigger
+              value="providers"
+              className="data-[state=active]:bg-cyan-400 data-[state=active]:text-black data-[state=active]:shadow-glow"
+            >
+              {t("providerKeys")}
+            </TabsTrigger>
+            <TabsTrigger
+              value="system"
+              className="data-[state=active]:bg-cyan-400 data-[state=active]:text-black data-[state=active]:shadow-glow"
+            >
+              {t("systemSettings")}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="providers" className="space-y-4">
@@ -262,8 +276,8 @@ function DashScopeKeyCard(props: {
       <CardHeader>
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-lg bg-blue-500/10 ring-1 ring-blue-400/20">
-              <Key className="size-5 text-blue-400" />
+            <div className="flex size-10 items-center justify-center rounded-lg bg-cyan-950/20 ring-1 ring-cyan-500/30">
+              <Key className="size-5 text-cyan-400" />
             </div>
             <div>
               <CardTitle>{t("dashscope.title")}</CardTitle>
@@ -323,13 +337,13 @@ function DashScopeKeyCard(props: {
               <button
                 type="button"
                 onClick={() => setShowKey((value) => !value)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-cyan-400"
               >
                 {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
               </button>
             </div>
             {props.credential?.key_decrypt_failed && !key ? (
-              <p className="mt-1 text-xs text-red-500">{t("keyDecryptFailed")}</p>
+              <p className="mt-1 text-xs text-red-400">{t("keyDecryptFailed")}</p>
             ) : null}
             {props.credential?.masked_key && !key && !props.credential?.key_decrypt_failed ? (
               <p className="mt-1 text-xs text-muted-foreground">
@@ -337,10 +351,10 @@ function DashScopeKeyCard(props: {
               </p>
             ) : null}
             {props.credential?.keys_mismatch ? (
-              <p className="mt-1 text-xs text-amber-500">{t("dashscope.keysMismatch")}</p>
+              <p className="mt-1 text-xs text-zinc-400">{t("dashscope.keysMismatch")}</p>
             ) : null}
             {keyChanged && key ? (
-              <p className="mt-1 text-xs text-amber-500">{t("keyChangedWarning")}</p>
+              <p className="mt-1 text-xs text-zinc-400">{t("keyChangedWarning")}</p>
             ) : null}
           </div>
 
@@ -348,12 +362,13 @@ function DashScopeKeyCard(props: {
             <Label className="text-sm font-medium">{t("dashscope.modelsHeading")}</Label>
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               size="sm"
               onClick={handleFetchModels}
               disabled={loadingModels}
-              className="h-auto p-1 text-xs"
+              className="h-auto px-2 py-1 text-xs"
             >
+              <RefreshCw className={cn("mr-1.5 size-3", loadingModels && "animate-spin")} />
               {loadingModels ? t("fetchingModels") : t("fetchModels")}
             </Button>
           </div>
@@ -423,7 +438,7 @@ function DashScopeKeyCard(props: {
             {message ? (
               <span
                 className={
-                  message.type === "success" ? "text-sm text-green-500" : "text-sm text-red-500"
+                  message.type === "success" ? "text-sm text-cyan-300" : "text-sm text-red-400"
                 }
               >
                 {message.text}
@@ -460,7 +475,7 @@ function DashscopeModelField(props: {
     <div>
       <Label htmlFor={props.id} className="flex items-center gap-2">
         {props.label}
-        {!props.value ? <span className="text-xs text-red-500">*{props.requiredLabel}</span> : null}
+        {!props.value ? <span className="text-xs text-red-400">*{props.requiredLabel}</span> : null}
       </Label>
       {props.models && !useCustomModel ? (
         <>
@@ -479,7 +494,7 @@ function DashscopeModelField(props: {
           <button
             type="button"
             onClick={() => setUseCustomModel(true)}
-            className="mt-1 text-xs text-muted-foreground hover:underline"
+            className="mt-1 text-xs text-muted-foreground hover:text-cyan-300 hover:underline"
           >
             {props.useCustomModelLabel}
           </button>
@@ -497,7 +512,7 @@ function DashscopeModelField(props: {
             <button
               type="button"
               onClick={() => setUseCustomModel(false)}
-              className="mt-1 text-xs text-muted-foreground hover:underline"
+              className="mt-1 text-xs text-muted-foreground hover:text-cyan-300 hover:underline"
             >
               {props.useProviderModelsLabel}
             </button>
@@ -624,8 +639,8 @@ function ProviderKeyCard(props: {
       <CardHeader>
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-lg bg-blue-500/10 ring-1 ring-blue-400/20">
-              <Key className="size-5 text-blue-400" />
+            <div className="flex size-10 items-center justify-center rounded-lg bg-cyan-950/20 ring-1 ring-cyan-500/30">
+              <Key className="size-5 text-cyan-400" />
             </div>
             <div>
               <CardTitle>{props.label}</CardTitle>
@@ -678,13 +693,13 @@ function ProviderKeyCard(props: {
               <button
                 type="button"
                 onClick={() => setShowKey((value) => !value)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-cyan-400"
               >
                 {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
               </button>
             </div>
             {props.keyDecryptFailed && !key ? (
-              <p className="mt-1 text-xs text-red-500">{t("keyDecryptFailed")}</p>
+              <p className="mt-1 text-xs text-red-400">{t("keyDecryptFailed")}</p>
             ) : null}
             {props.maskedKey && !key && !props.keyDecryptFailed ? (
               <p className="mt-1 text-xs text-muted-foreground">
@@ -692,7 +707,7 @@ function ProviderKeyCard(props: {
               </p>
             ) : null}
             {keyChanged && key ? (
-              <p className="mt-1 text-xs text-amber-500">{t("keyChangedWarning")}</p>
+              <p className="mt-1 text-xs text-zinc-400">{t("keyChangedWarning")}</p>
             ) : null}
           </div>
 
@@ -700,16 +715,17 @@ function ProviderKeyCard(props: {
             <div className="flex items-center justify-between">
               <Label htmlFor={`${props.provider}-model`} className="flex items-center gap-2">
                 {t("model")}
-                {!model ? <span className="text-xs text-red-500">*{t("required")}</span> : null}
+                {!model ? <span className="text-xs text-red-400">*{t("required")}</span> : null}
               </Label>
               <Button
                 type="button"
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 onClick={handleFetchModels}
                 disabled={loadingModels}
-                className="h-auto p-1 text-xs"
+                className="h-auto px-2 py-1 text-xs"
               >
+                <RefreshCw className={cn("mr-1.5 size-3", loadingModels && "animate-spin")} />
                 {loadingModels ? t("fetchingModels") : t("fetchModels")}
               </Button>
             </div>
@@ -731,7 +747,7 @@ function ProviderKeyCard(props: {
                 <button
                   type="button"
                   onClick={() => setUseCustomModel(true)}
-                  className="mt-1 text-xs text-muted-foreground hover:underline"
+                  className="mt-1 text-xs text-muted-foreground hover:text-cyan-300 hover:underline"
                 >
                   {t("useCustomModel")}
                 </button>
@@ -749,7 +765,7 @@ function ProviderKeyCard(props: {
                   <button
                     type="button"
                     onClick={() => setUseCustomModel(false)}
-                    className="mt-1 text-xs text-muted-foreground hover:underline"
+                    className="mt-1 text-xs text-muted-foreground hover:text-cyan-300 hover:underline"
                   >
                     {t("useProviderModels")}
                   </button>
@@ -784,7 +800,7 @@ function ProviderKeyCard(props: {
               {saving ? t("saving") : t("save")}
             </Button>
             {message ? (
-              <span className={message.type === "success" ? "text-sm text-green-500" : "text-sm text-red-500"}>
+              <span className={message.type === "success" ? "text-sm text-cyan-300" : "text-sm text-red-400"}>
                 {message.text}
               </span>
             ) : null}
@@ -794,6 +810,110 @@ function ProviderKeyCard(props: {
     </Card>
   );
 }
+
+function ToolCheckRow({
+  tool,
+  modelStatus,
+  t
+}: {
+  tool: ToolCheck;
+  modelStatus: WhisperModelStatus | null;
+  t: (key: string, values?: Record<string, number | string>) => string;
+}) {
+  const Icon = toolIcon[tool.name] ?? Wrench;
+  const downloading = tool.name === "whisper" && modelStatus?.downloading;
+  const progress =
+    downloading && modelStatus && modelStatus.bytes_total
+      ? Math.min(100, Math.round((modelStatus.bytes_done ?? 0) / modelStatus.bytes_total * 100))
+      : null;
+
+  return (
+    <div
+      className={cn(
+        "relative overflow-hidden rounded-xl border px-3 py-3 text-sm transition-all duration-200",
+        tool.found
+          ? "border-zinc-800 bg-zinc-900 hover:border-cyan-500/50"
+          : "border-red-900/50 bg-red-950/40 hover:border-red-900/70"
+      )}
+    >
+      <div
+        className={cn(
+          "absolute left-0 top-0 h-full w-1",
+          tool.found ? "bg-cyan-400 shadow-glow" : "bg-red-600"
+        )}
+      />
+      <div className="flex items-center justify-between gap-3 pl-2">
+        <div className="flex items-center gap-3">
+          <div
+            className={cn(
+              "flex size-9 items-center justify-center rounded-lg",
+              tool.found
+                ? "bg-cyan-950/20 text-cyan-400 ring-1 ring-cyan-500/30"
+                : "bg-zinc-900 text-red-400 ring-1 ring-zinc-700"
+            )}
+          >
+            <Icon className="size-4" />
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <strong className="flex items-center gap-2 font-semibold">
+              {tool.name}
+              {tool.bundled ? (
+                <span className="rounded-md border border-cyan-500/30 bg-cyan-950/30 px-1.5 py-0.5 text-[10px] font-medium text-cyan-300">
+                  {t("system.bundled")}
+                </span>
+              ) : null}
+            </strong>
+            <span className="text-xs text-muted-foreground">{tool.path ?? tool.error}</span>
+          </div>
+        </div>
+        <div className="shrink-0">
+          {tool.found ? (
+            <CheckCircle2 className="size-5 text-cyan-400" />
+          ) : (
+            <AlertCircle className="size-5 text-red-400" />
+          )}
+        </div>
+      </div>
+      {tool.name === "whisper" && modelStatus ? (
+        <div className="mt-3 pl-2">
+          {downloading && progress !== null ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-cyan-300/80">{t("system.downloadingModel")}</span>
+                <span className="font-medium text-cyan-300">{progress}%</span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                <div
+                  className="h-full rounded-full bg-cyan-400 transition-all duration-300"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+            </div>
+          ) : (
+            <p
+              className={cn(
+                "text-xs",
+                modelStatus.downloaded ? "text-cyan-300" : "text-muted-foreground"
+              )}
+            >
+              {modelStatus.downloaded
+                ? t("system.modelReady", { model: modelStatus.model_name })
+                : modelStatus.error
+                  ? modelStatus.error
+                  : t("system.modelPending", { model: modelStatus.model_name })}
+            </p>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const toolIcon: Record<string, React.ComponentType<{ className?: string }>> = {
+  ffmpeg: Film,
+  ffprobe: Film,
+  whisper: AudioLines
+};
 
 function SystemSettingsForm(props: {
   initialSettings: Settings;
@@ -866,27 +986,32 @@ function SystemSettingsForm(props: {
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Wrench className="size-5" />
+          <CardTitle className="flex items-center gap-3">
+            <div className="flex size-10 items-center justify-center rounded-lg bg-cyan-950/20 ring-1 ring-cyan-500/30">
+              <Wrench className="size-5 text-cyan-400" />
+            </div>
             {t("system.configuration")}
           </CardTitle>
           <CardDescription>{t("system.configurationDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSave} className="space-y-6">
-            <div className="flex items-start gap-3 rounded-md border border-border/60 px-3 py-3">
+            <label
+              htmlFor="mockProviders"
+              className="flex cursor-pointer items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 px-4 py-4 transition-colors hover:border-cyan-500/50 hover:bg-cyan-950/20 hover:text-cyan-300"
+            >
               <input
                 id="mockProviders"
                 type="checkbox"
                 checked={mockProviders}
                 onChange={(event) => setMockProviders(event.target.checked)}
-                className="mt-1"
+                className="mt-0.5 size-4 rounded border-zinc-700 bg-zinc-950 text-white accent-cyan-400 ring-offset-background focus:ring-2 focus:ring-cyan-500"
               />
               <div>
-                <Label htmlFor="mockProviders">{t("system.mockProviders")}</Label>
+                <span className="text-sm font-semibold">{t("system.mockProviders")}</span>
                 <p className="mt-1 text-xs text-muted-foreground">{t("system.mockProvidersHint")}</p>
               </div>
-            </div>
+            </label>
 
             <div>
               <Label htmlFor="asrModel">{t("system.whisperModel")}</Label>
@@ -959,7 +1084,7 @@ function SystemSettingsForm(props: {
                 {saving ? t("saving") : t("system.save")}
               </Button>
               {message ? (
-                <span className={message.type === "success" ? "text-sm text-green-500" : "text-sm text-red-500"}>
+                <span className={message.type === "success" ? "text-sm text-cyan-300" : "text-sm text-red-400"}>
                   {message.text}
                 </span>
               ) : null}
@@ -970,43 +1095,26 @@ function SystemSettingsForm(props: {
 
       <Card>
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle>{t("system.externalTools")}</CardTitle>
+          <CardTitle className="flex items-center gap-3">
+            <div className="flex size-10 items-center justify-center rounded-lg bg-cyan-950/20 ring-1 ring-cyan-500/30">
+              <Terminal className="size-5 text-cyan-400" />
+            </div>
+            {t("system.externalTools")}
+          </CardTitle>
           <Button type="button" variant="outline" size="sm" onClick={handleRecheck}>
             <RefreshCw className="mr-2 size-4" />
             {t("system.recheck")}
           </Button>
         </CardHeader>
-        <CardContent className="space-y-2">
-          <p className="text-xs text-muted-foreground">{props.initialSettings.workspace_root}</p>
-          {props.tools.map((tool) => (
-            <div
-              key={tool.name}
-              className={tool.found ? "rounded-md border border-emerald-400/20 bg-emerald-500/5 px-3 py-2 text-sm" : "rounded-md border border-red-400/20 bg-red-500/5 px-3 py-2 text-sm"}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <strong className="flex items-center gap-2">
-                  {tool.name}
-                  {tool.bundled ? (
-                    <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-xs font-normal text-emerald-300">
-                      {t("system.bundled")}
-                    </span>
-                  ) : null}
-                </strong>
-                <span className="text-right text-muted-foreground">{tool.path ?? tool.error}</span>
-              </div>
-              {tool.name === "whisper" && modelStatus ? (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {modelStatus.downloading
-                    ? t("system.downloadingModel")
-                    : modelStatus.downloaded
-                      ? t("system.modelReady", { model: modelStatus.model_name })
-                      : modelStatus.error
-                        ? modelStatus.error
-                        : t("system.modelPending", { model: modelStatus.model_name })}
-                </p>
-              ) : null}
-            </div>
-          ))}
+        <CardContent className="space-y-3">
+          <p className="rounded-md bg-zinc-950 px-3 py-2 text-xs text-zinc-400 font-mono">
+            {props.initialSettings.workspace_root}
+          </p>
+          <div className="space-y-2">
+            {props.tools.map((tool) => (
+              <ToolCheckRow key={tool.name} tool={tool} modelStatus={modelStatus} t={t} />
+            ))}
+          </div>
         </CardContent>
       </Card>
     </div>

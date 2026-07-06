@@ -4,6 +4,7 @@ import { listAllAssets, listTasks } from "@/api";
 import { AssetSections } from "@/components/AssetSections";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useTranslations } from "@/i18n/context";
 import {
   ASSET_FILTERS,
@@ -63,14 +64,14 @@ export function AssetLibraryView(props: { onNewTask: () => void }) {
           </Button>
         }
       />
-      <div className="flex flex-col gap-5 px-4 pb-6 pt-3 lg:px-6">
+      <div className="animate-fade-in flex flex-col gap-5 px-4 pb-6 pt-3 lg:px-6">
         <FilterTabs
           activeFilter={activeFilter}
           labels={filterLabels}
           onSelect={(filter) => setActiveFilter(filter)}
         />
         {loading ? (
-          <p className="text-sm text-muted-foreground">{t("empty")}</p>
+          <AssetLibrarySkeleton />
         ) : (
           <AssetSections
             assets={filteredAssets}
@@ -95,15 +96,15 @@ function FilterTabs({
   onSelect: (filter: AssetFilterKey) => void;
 }) {
   return (
-    <nav className="flex flex-wrap items-center gap-2 rounded-lg border border-white/[0.08] bg-card/[0.72] p-2">
+    <nav className="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950/80 p-2 backdrop-blur-sm">
       {ASSET_FILTERS.map((filter) => (
         <button
           key={filter.key}
           className={cn(
-            "rounded-md px-3 py-2 text-xs font-semibold transition-colors",
+            "rounded-lg px-3.5 py-2 text-xs font-semibold transition-all duration-200",
             activeFilter === filter.key
-              ? "bg-blue-500/[0.15] text-blue-100"
-              : "text-muted-foreground hover:bg-white/[0.05] hover:text-foreground"
+              ? "bg-cyan-400 text-black shadow-glow"
+              : "text-zinc-400 hover:bg-cyan-950/20 hover:text-cyan-300"
           )}
           onClick={() => onSelect(filter.key)}
           type="button"
@@ -115,6 +116,23 @@ function FilterTabs({
   );
 }
 
+function AssetLibrarySkeleton() {
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
+      {Array.from({ length: 8 }).map((_, index) => (
+        <div
+          key={index}
+          className="flex flex-col gap-3 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/90 p-3"
+        >
+          <Skeleton className="aspect-video w-full rounded-lg" />
+          <Skeleton className="h-4 w-3/4" />
+          <Skeleton className="h-3 w-1/2" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function getStatusLabels(t: (key: string) => string) {
   return {
     READY: t("READY"),
@@ -123,4 +141,3 @@ function getStatusLabels(t: (key: string) => string) {
     PENDING: t("PENDING")
   };
 }
-
