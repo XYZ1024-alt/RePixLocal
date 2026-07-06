@@ -224,6 +224,53 @@ impl FfmpegRunner {
         Err(AppError::Workflow("ffmpeg concat failed".into()))
     }
 
+    pub async fn fit_segment_duration(
+        &self,
+        input: &Path,
+        output: &Path,
+        target_secs: f64,
+    ) -> AppResult<()> {
+        if !target_secs.is_finite() || target_secs <= 0.0 {
+            return Err(AppError::Workflow(format!(
+                "segment target duration is invalid: {target_secs}"
+            )));
+        }
+        let source_secs = self.probe_duration(input).await?;
+        let ffmpeg = self.ffmpeg_path().await?;
+        let mut args = vec!["-y".to_string(), "-i".to_string(), path_arg(input)];
+        let pad = target_secs - source_secs;
+        if pad > 0.05 {
+            args.push("-vf".to_string());
+            args.push(format!("tpad=stop_mode=clone:stop_duration={pad:.3}"));
+        }
+        args.extend([
+            "-t".to_string(),
+            format!("{target_secs:.3}"),
+            "-an".to_string(),
+            "-c:v".to_string(),
+            "libx264".to_string(),
+            "-crf".to_string(),
+            "18".to_string(),
+            "-pix_fmt".to_string(),
+            "yuv420p".to_string(),
+            path_arg(output),
+        ]);
+        let status = Command::new(&ffmpeg)
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status()
+            .await
+            .map_err(AppError::from)?;
+        if status.success() {
+            return Ok(());
+        }
+        Err(AppError::Workflow(
+            "ffmpeg segment duration fit failed".into(),
+        ))
+    }
+
     pub async fn probe_duration(&self, path: &Path) -> AppResult<f64> {
         let ffprobe = self.ffprobe_path().await?;
         let output = Command::new(&ffprobe)
@@ -322,8 +369,6 @@ impl FfmpegRunner {
                 video_filter,
                 "-vsync",
                 "0",
-                "-frame_pts",
-                "1",
                 &path_arg(output_pattern),
             ])
             .stdin(Stdio::null())
@@ -540,6 +585,75 @@ mod tests {
             .position(|window| window == b"fmt ")
             .expect("wav has fmt chunk");
         u32::from_le_bytes(bytes[fmt_pos + 12..fmt_pos + 16].try_into().unwrap())
+    }
+
+    async fn write_test_video(ffmpeg: &Path, out: &Path, duration_secs: f64) {
+        let status = Command::new(ffmpeg)
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("testsrc=duration={duration_secs}:size=320x240:rate=30"),
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                &path_arg(out),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .expect("spawn ffmpeg");
+        assert!(status.success(), "failed to generate test video");
+    }
+
+    #[tokio::test]
+    async fn fit_segment_duration_pads_short_segment() {
+        let runner = test_runner();
+        let ffmpeg = runner.ffmpeg_path().await.expect("ffmpeg available");
+        let dir = std::env::temp_dir().join(format!("repix-fit-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let input = dir.join("short.mp4");
+        write_test_video(&ffmpeg, &input, 1.0).await;
+
+        let output = dir.join("padded.mp4");
+        runner
+            .fit_segment_duration(&input, &output, 2.0)
+            .await
+            .expect("fit segment");
+
+        let duration = runner.probe_duration(&output).await.unwrap();
+        assert!(
+            (duration - 2.0).abs() < 0.2,
+            "expected ~2.0s, got {duration}"
+        );
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn fit_segment_duration_trims_long_segment() {
+        let runner = test_runner();
+        let ffmpeg = runner.ffmpeg_path().await.expect("ffmpeg available");
+        let dir = std::env::temp_dir().join(format!("repix-fit-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let input = dir.join("long.mp4");
+        write_test_video(&ffmpeg, &input, 2.0).await;
+
+        let output = dir.join("trimmed.mp4");
+        runner
+            .fit_segment_duration(&input, &output, 1.0)
+            .await
+            .expect("fit segment");
+
+        let duration = runner.probe_duration(&output).await.unwrap();
+        assert!(
+            (duration - 1.0).abs() < 0.2,
+            "expected ~1.0s, got {duration}"
+        );
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
     #[tokio::test]

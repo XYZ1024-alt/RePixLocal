@@ -72,9 +72,13 @@ pub async fn pad_keyframes_to_count(
     Ok(())
 }
 
+const CANDIDATE_FRAMES_PER_SCENE: i32 = 5;
+
 fn frame_filter(fps: f64, subtitle_region_ratio: Option<f64>) -> AppResult<String> {
+    let candidate_fps = fps * CANDIDATE_FRAMES_PER_SCENE as f64;
+    let select = format!("fps={candidate_fps},thumbnail={CANDIDATE_FRAMES_PER_SCENE}");
     let Some(ratio) = subtitle_region_ratio else {
-        return Ok(format!("fps={fps}"));
+        return Ok(select);
     };
     if ratio < MIN_SUBTITLE_REGION_RATIO || ratio > MAX_SUBTITLE_REGION_RATIO {
         return Err(AppError::Workflow(format!(
@@ -82,7 +86,7 @@ fn frame_filter(fps: f64, subtitle_region_ratio: Option<f64>) -> AppResult<Strin
         )));
     }
     Ok(format!(
-        "fps={fps},split[base][blur];[blur]crop=w=iw:h=ih*{ratio:.3}:x=0:y=ih-ih*{ratio:.3},boxblur=10:1[blurred];[base][blurred]overlay=0:H-h"
+        "{select},split[base][blur];[blur]crop=w=iw:h=ih*{ratio:.3}:x=0:y=ih-ih*{ratio:.3},boxblur=10:1[blurred];[base][blurred]overlay=0:H-h"
     ))
 }
 
@@ -112,6 +116,78 @@ fn collect_frame_paths(output_dir: &Path, count: i32) -> AppResult<Vec<PathBuf>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_filter_picks_representative_frame_among_candidates() {
+        assert_eq!(frame_filter(0.5, None).unwrap(), "fps=2.5,thumbnail=5");
+        let with_blur = frame_filter(0.5, Some(0.18)).unwrap();
+        assert!(
+            with_blur.starts_with("fps=2.5,thumbnail=5,"),
+            "blur chain must run after representative-frame selection: {with_blur}"
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_keyframes_yields_sequential_one_based_frames() {
+        use crate::config::AppConfig;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let ffmpeg = FfmpegRunner::new(Arc::new(RwLock::new(AppConfig {
+            workspace_root: String::new(),
+            ffmpeg_path: None,
+            ffprobe_path: None,
+            asr_model: None,
+            mock_providers: true,
+            whisper_bin: None,
+            whisper_model_dir: None,
+        })));
+        let dir = std::env::temp_dir().join(format!("repix-kf-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let video = dir.join("src.mp4");
+        let status = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=2:size=320x240:rate=30",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                &video.to_string_lossy(),
+            ])
+            .status()
+            .await
+            .expect("spawn ffmpeg");
+        assert!(status.success(), "failed to generate test video");
+
+        let out_dir = dir.join("keyframes");
+        let frames = extract_keyframes(
+            &ffmpeg,
+            &video,
+            &out_dir,
+            3,
+            KeyframeOptions {
+                subtitle_region_ratio: None,
+            },
+        )
+        .await
+        .expect("extract keyframes");
+
+        assert_eq!(frames.len(), 3);
+        for index in 1..=3 {
+            assert!(out_dir.join(format!("frame_{index:03}.png")).exists());
+        }
+        assert!(
+            !out_dir.join("frame_000.png").exists(),
+            "keyframes must be numbered from 1 without a dropped zeroth frame"
+        );
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
 
     #[tokio::test]
     async fn pad_keyframes_duplicates_last_frame() {

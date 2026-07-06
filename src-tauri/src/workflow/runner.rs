@@ -1006,21 +1006,53 @@ impl PipelineRunner {
             .join(format!("{task_id}-{run_id}-render"));
         tokio::fs::create_dir_all(&workdir).await?;
         let render_result = async {
-            self.log(task_id, run_id, app, "info", "Concatenating segments")
-                .await?;
-            let concat_path = workdir.join("concat.mp4");
-            self.ffmpeg
-                .concat_segments(&segment_paths, &concat_path)
-                .await?;
-
             let narration_path = self.assets.narration_path(task_id);
             let audio = if narration_path.exists() {
                 Some(narration_path)
             } else {
                 None
             };
-            let video_size = self.ffmpeg.probe_video_size(&concat_path).await.ok();
             let scenes = self.scenes_for_run(task_id, run_id).await?;
+
+            // With narration, subtitles and audio follow the raw ttsDurationMs
+            // timeline; each segment must match it or the tracks drift apart.
+            let concat_inputs = if audio.is_some() {
+                self.log(
+                    task_id,
+                    run_id,
+                    app,
+                    "info",
+                    "Aligning segment durations to narration",
+                )
+                .await?;
+                let mut aligned = Vec::with_capacity(segment_paths.len());
+                for (index, segment) in segment_paths.iter().enumerate() {
+                    let target = match scenes
+                        .iter()
+                        .find(|scene| scene.scene_index == index as i32)
+                    {
+                        Some(scene) => scene_narration_secs(scene),
+                        None => self.ffmpeg.probe_duration(segment).await?,
+                    };
+                    let fitted = workdir.join(format!("aligned_{index:03}.mp4"));
+                    self.ffmpeg
+                        .fit_segment_duration(segment, &fitted, target)
+                        .await?;
+                    aligned.push(fitted);
+                }
+                aligned
+            } else {
+                segment_paths.clone()
+            };
+
+            self.log(task_id, run_id, app, "info", "Concatenating segments")
+                .await?;
+            let concat_path = workdir.join("concat.mp4");
+            self.ffmpeg
+                .concat_segments(&concat_inputs, &concat_path)
+                .await?;
+
+            let video_size = self.ffmpeg.probe_video_size(&concat_path).await.ok();
             let cues = cues_from_scenes_with_tts(&scenes);
             let ass_path = workdir.join("subs.ass");
             build_ass(
@@ -1946,6 +1978,17 @@ fn scene_keyframe_path(
     )))
 }
 
+fn scene_narration_secs(scene: &Scene) -> f64 {
+    scene
+        .metadata_json
+        .as_ref()
+        .and_then(|metadata| metadata.get("ttsDurationMs"))
+        .and_then(|value| value.as_i64())
+        .filter(|value| *value > 0)
+        .map(|duration_ms| duration_ms as f64 / 1000.0)
+        .unwrap_or(3.0)
+}
+
 fn scene_duration_secs(scene: &Scene) -> f64 {
     if let Some(duration_ms) = scene
         .metadata_json
@@ -2020,6 +2063,38 @@ mod tests {
             None
         );
         assert_eq!(resolution_from_config(&serde_json::json!({})), None);
+    }
+
+    fn scene_with_metadata(metadata: Option<serde_json::Value>) -> Scene {
+        Scene {
+            id: "scene-1".into(),
+            task_id: "task-1".into(),
+            run_id: None,
+            scene_index: 0,
+            script_text: "text".into(),
+            visual_prompt: None,
+            motion_prompt: None,
+            metadata_json: metadata,
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn scene_narration_secs_matches_subtitle_timeline() {
+        // Raw ttsDurationMs, unclamped — must mirror cues_from_scenes_with_tts.
+        assert_eq!(
+            scene_narration_secs(&scene_with_metadata(Some(
+                serde_json::json!({"ttsDurationMs": 12000})
+            ))),
+            12.0
+        );
+        assert_eq!(scene_narration_secs(&scene_with_metadata(None)), 3.0);
+        assert_eq!(
+            scene_narration_secs(&scene_with_metadata(Some(
+                serde_json::json!({"ttsDurationMs": 0})
+            ))),
+            3.0
+        );
     }
 
     async fn test_runner() -> (PipelineRunner, Arc<Repository>) {
