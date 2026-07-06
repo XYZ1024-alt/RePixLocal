@@ -271,6 +271,76 @@ impl FfmpegRunner {
         ))
     }
 
+    pub async fn is_video_black(&self, path: &Path) -> AppResult<bool> {
+        let total_secs = self.probe_duration(path).await?;
+        if total_secs <= 0.0 {
+            return Ok(true);
+        }
+        let ffmpeg = self.ffmpeg_path().await?;
+        let output = Command::new(&ffmpeg)
+            .args([
+                "-i",
+                &path_arg(path),
+                "-vf",
+                "blackdetect=d=0.1:pix_th=0.05",
+                "-an",
+                "-f",
+                "null",
+                "-",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(AppError::from)?;
+        if !output.status.success() {
+            return Err(AppError::Workflow("ffmpeg black-frame probe failed".into()));
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let black_secs: f64 = stderr
+            .split("black_duration:")
+            .skip(1)
+            .filter_map(|rest| {
+                rest.split_whitespace()
+                    .next()
+                    .and_then(|value| value.parse::<f64>().ok())
+            })
+            .sum();
+        Ok(black_secs / total_secs >= 0.95)
+    }
+
+    pub async fn is_audio_silent(&self, path: &Path) -> AppResult<bool> {
+        let ffmpeg = self.ffmpeg_path().await?;
+        let output = Command::new(&ffmpeg)
+            .args([
+                "-i",
+                &path_arg(path),
+                "-af",
+                "volumedetect",
+                "-vn",
+                "-f",
+                "null",
+                "-",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(AppError::from)?;
+        if !output.status.success() {
+            return Err(AppError::Workflow("ffmpeg volume probe failed".into()));
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mean_volume = stderr.split("mean_volume:").nth(1).and_then(|rest| {
+            rest.split_whitespace()
+                .next()
+                .and_then(|value| value.parse::<f64>().ok())
+        });
+        Ok(mean_volume.is_none_or(|db| db < -55.0))
+    }
+
     pub async fn probe_duration(&self, path: &Path) -> AppResult<f64> {
         let ffprobe = self.ffprobe_path().await?;
         let output = Command::new(&ffprobe)
@@ -426,6 +496,8 @@ impl FfmpegRunner {
             args.push(vf_parts.join(","));
             args.push("-c:v".to_string());
             args.push("libx264".to_string());
+            args.push("-crf".to_string());
+            args.push("18".to_string());
         } else {
             args.push("-c:v".to_string());
             args.push("copy".to_string());
@@ -608,6 +680,74 @@ mod tests {
             .await
             .expect("spawn ffmpeg");
         assert!(status.success(), "failed to generate test video");
+    }
+
+    #[tokio::test]
+    async fn is_video_black_flags_black_video_only() {
+        let runner = test_runner();
+        let ffmpeg = runner.ffmpeg_path().await.expect("ffmpeg available");
+        let dir = std::env::temp_dir().join(format!("repix-black-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let black = dir.join("black.mp4");
+        let status = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=black:duration=1:size=320x240:rate=30",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                &path_arg(&black),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .expect("spawn ffmpeg");
+        assert!(status.success());
+        let normal = dir.join("normal.mp4");
+        write_test_video(&ffmpeg, &normal, 1.0).await;
+
+        assert!(runner.is_video_black(&black).await.unwrap());
+        assert!(!runner.is_video_black(&normal).await.unwrap());
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn is_audio_silent_flags_silence_only() {
+        let runner = test_runner();
+        let ffmpeg = runner.ffmpeg_path().await.expect("ffmpeg available");
+        let dir = std::env::temp_dir().join(format!("repix-silent-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let silent = dir.join("silent.wav");
+        let status = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=duration=0.5:sample_rate=24000",
+                &path_arg(&silent),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .expect("spawn ffmpeg");
+        assert!(status.success());
+        let voiced = dir.join("voiced.wav");
+        write_sine_wav(&ffmpeg, &voiced, 24_000).await;
+
+        assert!(runner.is_audio_silent(&silent).await.unwrap());
+        assert!(!runner.is_audio_silent(&voiced).await.unwrap());
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
     #[tokio::test]

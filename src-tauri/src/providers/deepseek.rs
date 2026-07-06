@@ -33,7 +33,7 @@ For EACH scene output these fields:
    - Goal: new frame looks like it's from the SAME video shoot, just a different take
    - Write in English
 
-3. **motionPrompt**: Camera and subject movement in English.
+3. **motionPrompt**: Camera and subject movement in English. Use concrete cinematography vocabulary (e.g. slow push-in, pan left, static tripod shot, orbit right) with ONE primary camera move per scene plus brief subject motion. Keep camera style consistent across scenes.
 
 Source scenes:
 {visual_context}
@@ -49,7 +49,7 @@ Your task: write narration and motion for a short video using these images.
 
 For EACH scene output:
 1. **scriptText**: narration matching the brief and image content, in tone '{tone}'. Use the same language as the brief.
-2. **motionPrompt**: camera and subject movement in English.
+2. **motionPrompt**: camera and subject movement in English. Use concrete cinematography vocabulary (e.g. slow push-in, pan left, static tripod shot, orbit right) with ONE primary camera move per scene plus brief subject motion. Keep camera style consistent across scenes.
 
 Rules:
 - Do not invent scenes beyond the image count.

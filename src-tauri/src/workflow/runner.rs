@@ -527,6 +527,12 @@ impl PipelineRunner {
             .get("aspectRatio")
             .and_then(|value| value.as_str())
             .unwrap_or("16:9");
+        let strength = img2img_strength_for_tone(
+            task.config_json
+                .get("rewriteTone")
+                .and_then(|value| value.as_str())
+                .unwrap_or("faithful"),
+        );
         let scenes = self.scenes_for_run(task_id, run_id).await?;
         if scenes.is_empty() {
             return Err(AppError::Workflow(
@@ -563,7 +569,7 @@ impl PipelineRunner {
             )
             .await?;
             let output = tongyi
-                .generate_frame_img2img(&keyframe_path, &prompt, index, 0.35, aspect_ratio)
+                .generate_frame_img2img(&keyframe_path, &prompt, index, strength, aspect_ratio)
                 .await?;
             download_to_file(&output.source_url, &frame_path).await?;
             let frame = asset_for_path(
@@ -779,6 +785,12 @@ impl PipelineRunner {
             let output = cosyvoice
                 .synthesize_to_file(&scene.script_text, voice, language, &tts_path)
                 .await?;
+            if self.ffmpeg.is_audio_silent(&tts_path).await? {
+                let _ = tokio::fs::remove_file(&tts_path).await;
+                return Err(AppError::Workflow(format!(
+                    "Scene {index}: TTS produced silent audio; resume the task to regenerate"
+                )));
+            }
             let duration_secs = self.ffmpeg.probe_duration(&tts_path).await?;
             let duration_ms = (duration_secs * 1000.0).round() as i64;
             let mut metadata = scene.metadata_json.clone().unwrap_or_else(|| json!({}));
@@ -921,6 +933,19 @@ impl PipelineRunner {
                 .poll_segment_with_cancel(task_id, run_id, app, &seedance, &job_id, index)
                 .await?;
             download_to_file(&video_url, &segment_path).await?;
+            if self.ffmpeg.is_video_black(&segment_path).await? {
+                let _ = tokio::fs::remove_file(&segment_path).await;
+                let mut metadata = scene.metadata_json.clone().unwrap_or_else(|| json!({}));
+                if let Some(object) = metadata.as_object_mut() {
+                    object.remove("seedanceJobId");
+                }
+                self.repo
+                    .update_scene_metadata(&scene.id, &metadata)
+                    .await?;
+                return Err(AppError::Workflow(format!(
+                    "Scene {index}: generated segment is black; resume the task to regenerate"
+                )));
+            }
             let actual_duration_sec =
                 generated_segment_usage_seconds(self.ffmpeg.probe_duration(&segment_path).await?)?;
             let segment = asset_for_path(
@@ -1870,6 +1895,15 @@ fn scene_count_from_config(config: &serde_json::Value, task_type: WorkflowTaskTy
     5
 }
 
+fn img2img_strength_for_tone(tone: &str) -> f64 {
+    match tone {
+        "professional" => 0.40,
+        "casual" => 0.45,
+        "dramatic" => 0.55,
+        _ => 0.35,
+    }
+}
+
 fn resolution_from_config(config: &serde_json::Value) -> Option<String> {
     config
         .get("resolution")
@@ -2063,6 +2097,15 @@ mod tests {
             None
         );
         assert_eq!(resolution_from_config(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn img2img_strength_follows_rewrite_tone() {
+        assert_eq!(img2img_strength_for_tone("faithful"), 0.35);
+        assert_eq!(img2img_strength_for_tone("professional"), 0.40);
+        assert_eq!(img2img_strength_for_tone("casual"), 0.45);
+        assert_eq!(img2img_strength_for_tone("dramatic"), 0.55);
+        assert_eq!(img2img_strength_for_tone("unknown"), 0.35);
     }
 
     fn scene_with_metadata(metadata: Option<serde_json::Value>) -> Scene {
