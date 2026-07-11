@@ -1,6 +1,8 @@
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use image::{ImageFormat, ImageReader};
 use serde_json::{json, Value};
 use tokio::fs;
 use uuid::Uuid;
@@ -47,7 +49,7 @@ impl AssetManager {
             let source = PathBuf::from(image_path);
             validate_readable_file(&source).await?;
             let target = self.source_image_path(task_id, index as i32);
-            self.copy_file(&source, &target).await?;
+            normalize_image_to_png(&source, &target).await?;
             assets.push(new_asset(
                 task_id,
                 None,
@@ -211,6 +213,50 @@ async fn validate_readable_file(path: &Path) -> AppResult<()> {
     )))
 }
 
+async fn normalize_image_to_png(source: &Path, target: &Path) -> AppResult<()> {
+    let source = source.to_path_buf();
+    let source_display = source.display().to_string();
+    let png = tokio::task::spawn_blocking(move || encode_image_as_png(&source))
+        .await
+        .map_err(|error| {
+            AppError::Workflow(format!(
+                "image conversion task failed for {source_display}: {error}"
+            ))
+        })?
+        .map_err(|error| {
+            AppError::Workflow(format!(
+                "failed to convert source image {source_display} to PNG: {error}"
+            ))
+        })?;
+
+    ensure_parent(target).await?;
+    fs::write(target, png).await?;
+    Ok(())
+}
+
+fn encode_image_as_png(source: &Path) -> Result<Vec<u8>, String> {
+    let reader = ImageReader::open(source)
+        .map_err(|error| error.to_string())?
+        .with_guessed_format()
+        .map_err(|error| error.to_string())?;
+    let format = reader
+        .format()
+        .ok_or_else(|| "unrecognized image format".to_string())?;
+    if !matches!(
+        format,
+        ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP
+    ) {
+        return Err(format!("unsupported image format: {format:?}"));
+    }
+
+    let image = reader.decode().map_err(|error| error.to_string())?;
+    let mut output = Cursor::new(Vec::new());
+    image
+        .write_to(&mut output, ImageFormat::Png)
+        .map_err(|error| error.to_string())?;
+    Ok(output.into_inner())
+}
+
 fn new_asset(
     task_id: &str,
     run_id: Option<&str>,
@@ -296,4 +342,79 @@ fn minimal_wav_bytes() -> Vec<u8> {
     bytes.extend_from_slice(&data_size.to_le_bytes());
     bytes.resize(bytes.len() + data_size as usize, 0);
     bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{DynamicImage, GenericImageView, Rgb, RgbImage};
+
+    fn write_test_image(path: &Path, format: ImageFormat) {
+        let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(3, 2, Rgb([12, 34, 56])));
+        image.save_with_format(path, format).unwrap();
+    }
+
+    #[tokio::test]
+    async fn imports_supported_images_as_real_png_files() {
+        let root = std::env::temp_dir().join(format!("repix-image-import-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let manager = AssetManager::new(Workspace::from_root(root.clone()));
+        let sources = [
+            ("source.png", ImageFormat::Png),
+            ("source.jpg", ImageFormat::Jpeg),
+            ("source.webp", ImageFormat::WebP),
+        ];
+        let mut source_paths = Vec::new();
+        for (name, format) in sources {
+            let path = root.join(name);
+            write_test_image(&path, format);
+            source_paths.push(path.to_string_lossy().to_string());
+        }
+
+        let assets = manager
+            .import_source_images("task-1", &source_paths)
+            .await
+            .unwrap();
+
+        assert_eq!(assets.len(), source_paths.len());
+        for (index, asset) in assets.iter().enumerate() {
+            let target = manager.source_image_path("task-1", index as i32);
+            let bytes = std::fs::read(&target).unwrap();
+            let decoded = image::open(&target).unwrap();
+            assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+            assert_eq!(decoded.dimensions(), (3, 2));
+            assert_eq!(asset.path, target.to_string_lossy());
+            assert_eq!(asset.mime_type.as_deref(), Some("image/png"));
+            assert_eq!(asset.scene_index, Some(index as i32));
+        }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_images_without_creating_a_target() {
+        let root = std::env::temp_dir().join(format!(
+            "repix-invalid-image-import-test-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("broken.jpg");
+        std::fs::write(&source, b"not an image").unwrap();
+        let manager = AssetManager::new(Workspace::from_root(root.clone()));
+
+        let error = manager
+            .import_source_images("task-1", &[source.to_string_lossy().to_string()])
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            AppError::Workflow(message)
+                if message.contains("failed to convert source image")
+                    && message.contains("broken.jpg")
+        ));
+        assert!(!manager.source_image_path("task-1", 0).exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
