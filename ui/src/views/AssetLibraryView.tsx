@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Upload } from "lucide-react";
+import { AlertTriangle, RefreshCw, Upload } from "lucide-react";
 import { listAllAssets, listTasks } from "@/api";
 import { AssetSections } from "@/components/AssetSections";
+import { EmptyState } from "@/components/EmptyState";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTranslations } from "@/i18n/context";
 import {
@@ -21,9 +23,13 @@ export function AssetLibraryView(props: { onNewTask: () => void }) {
   const [activeFilter, setActiveFilter] = useState<AssetFilterKey>("all");
   const [assets, setAssets] = useState<LibraryAsset[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryVersion, setRetryVersion] = useState(0);
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setError(null);
 
     async function load() {
       try {
@@ -31,6 +37,8 @@ export function AssetLibraryView(props: { onNewTask: () => void }) {
         if (!active) return;
         const taskTitles = Object.fromEntries(tasks.map((task) => [task.id, task.title]));
         setAssets(toLibraryAssets(rows, taskTitles));
+      } catch (loadError) {
+        if (active) setError(errorMessage(loadError));
       } finally {
         if (active) setLoading(false);
       }
@@ -40,7 +48,7 @@ export function AssetLibraryView(props: { onNewTask: () => void }) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [retryVersion]);
 
   const filteredAssets = useMemo(
     () => filterLibraryAssets(assets, activeFilter),
@@ -72,6 +80,25 @@ export function AssetLibraryView(props: { onNewTask: () => void }) {
         />
         {loading ? (
           <AssetLibrarySkeleton />
+        ) : error ? (
+          <Card>
+            <EmptyState
+              icon={AlertTriangle}
+              title={t("loadError")}
+              description={error}
+              action={
+                <Button
+                  onClick={() => setRetryVersion((current) => current + 1)}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <RefreshCw />
+                  {t("retry")}
+                </Button>
+              }
+            />
+          </Card>
         ) : (
           <AssetSections
             assets={filteredAssets}
@@ -140,4 +167,8 @@ function getStatusLabels(t: (key: string) => string) {
     FAILED: t("FAILED"),
     PENDING: t("PENDING")
   };
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }

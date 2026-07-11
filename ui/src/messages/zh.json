@@ -82,6 +82,9 @@
     "openConsole": "打开控制台"
   },
   "console": {
+    "loadError": "无法加载流水线运行记录。",
+    "refreshError": "刷新失败，当前显示上次成功加载的结果：{message}",
+    "retry": "重试",
     "title": "流水线控制台",
     "listDescription": "所有流水线运行，点击可查看实时进度。",
     "noRuns": "暂无流水线运行",
@@ -116,6 +119,8 @@
     }
   },
   "library": {
+    "loadError": "无法加载素材。",
+    "retry": "重试",
     "title": "媒体与素材库",
     "description": "已生成的分镜帧、片段、音频和最终成片",
     "upload": "上传",

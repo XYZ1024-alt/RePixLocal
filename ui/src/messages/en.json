@@ -82,6 +82,9 @@
     "openConsole": "Open console"
   },
   "console": {
+    "loadError": "Unable to load pipeline runs.",
+    "refreshError": "Refresh failed. Showing the last successful result: {message}",
+    "retry": "Retry",
     "title": "Pipeline Console",
     "listDescription": "All pipeline runs - click one to view live progress.",
     "noRuns": "No pipeline runs yet",
@@ -116,6 +119,8 @@
     }
   },
   "library": {
+    "loadError": "Unable to load assets.",
+    "retry": "Retry",
     "title": "Media and Asset Library",
     "description": "Generated frames, segments, audio and final renders",
     "upload": "Upload",

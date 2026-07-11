@@ -1,17 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  AlertTriangle,
   CheckCircle2,
   ChevronRight,
   Circle,
   Inbox,
   Loader2,
   PlayCircle,
+  RefreshCw,
   XCircle
 } from "lucide-react";
 import { listRuns } from "@/api";
 import { EmptyState } from "@/components/EmptyState";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLocale, useTranslations } from "@/i18n/context";
@@ -19,6 +22,8 @@ import { cn } from "@/lib/utils";
 import type { RunListItem } from "@/types";
 
 type RunStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "PAUSED" | "CANCELLED";
+
+const RUN_LIST_REFRESH_MS = 3000;
 
 const statusIcon: Record<string, typeof Circle> = {
   COMPLETED: CheckCircle2,
@@ -63,58 +68,117 @@ export function ConsoleListView(props: { onOpenRun: (runId: string) => void }) {
   const tStages = useTranslations("stages");
   const [runs, setRuns] = useState<RunListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [retryVersion, setRetryVersion] = useState(0);
+  const loadedSuccessfully = useRef(false);
 
   useEffect(() => {
     let active = true;
+    let timerId: number | null = null;
+
+    if (!loadedSuccessfully.current) {
+      setLoading(true);
+      setError(null);
+    }
 
     async function load() {
       try {
         const nextRuns = await listRuns(100);
-        if (active) setRuns(nextRuns);
+        if (!active) return;
+        loadedSuccessfully.current = true;
+        setRuns(nextRuns);
+        setLoaded(true);
+        setError(null);
+      } catch (loadError) {
+        if (active) setError(errorMessage(loadError));
       } finally {
-        if (active) setLoading(false);
+        if (active) {
+          setLoading(false);
+          timerId = window.setTimeout(() => void load(), RUN_LIST_REFRESH_MS);
+        }
       }
     }
 
     void load();
-    const id = window.setInterval(() => {
-      void listRuns(100).then((nextRuns) => {
-        if (active) setRuns(nextRuns);
-      });
-    }, 3000);
 
     return () => {
       active = false;
-      window.clearInterval(id);
+      if (timerId !== null) window.clearTimeout(timerId);
     };
-  }, []);
+  }, [retryVersion]);
+
+  function retry() {
+    setRetryVersion((current) => current + 1);
+  }
 
   return (
     <>
       <PageHeader title={t("title")} description={t("listDescription")} />
       <div className="flex flex-col gap-3 px-4 pb-6 pt-3 lg:px-6">
-        {loading ? (
+        {loading && !loaded ? (
           <ConsoleListSkeleton />
-        ) : runs.length === 0 ? (
+        ) : error && !loaded ? (
           <Card>
-            <EmptyState icon={Inbox} description={t("empty")} />
+            <EmptyState
+              icon={AlertTriangle}
+              title={t("loadError")}
+              description={error}
+              action={
+                <Button onClick={retry} size="sm" type="button" variant="outline">
+                  <RefreshCw />
+                  {t("retry")}
+                </Button>
+              }
+            />
           </Card>
         ) : (
-          runs.map((run, index) => (
-            <RunRow
-              key={run.id}
-              title={run.title}
-              stage={run.current_stage ? tStages(run.current_stage) : t("notStarted")}
-              createdAt={formatCreatedAt(run.created_at, locale)}
-              status={run.status}
-              statusLabel={tStatus(run.status as RunStatus)}
-              onOpen={() => props.onOpenRun(run.id)}
-              index={index}
-            />
-          ))
+          <>
+            {error ? (
+              <RefreshWarning
+                message={t("refreshError", { message: error })}
+                onRetry={retry}
+                retryLabel={t("retry")}
+              />
+            ) : null}
+            {runs.length === 0 ? (
+              <Card>
+                <EmptyState icon={Inbox} description={t("empty")} />
+              </Card>
+            ) : (
+              runs.map((run, index) => (
+                <RunRow
+                  key={run.id}
+                  title={run.title}
+                  stage={run.current_stage ? tStages(run.current_stage) : t("notStarted")}
+                  createdAt={formatCreatedAt(run.created_at, locale)}
+                  status={run.status}
+                  statusLabel={tStatus(run.status as RunStatus)}
+                  onOpen={() => props.onOpenRun(run.id)}
+                  index={index}
+                />
+              ))
+            )}
+          </>
         )}
       </div>
     </>
+  );
+}
+
+function RefreshWarning(props: { message: string; retryLabel: string; onRetry: () => void }) {
+  return (
+    <div
+      className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-900/50 bg-amber-950/30 px-4 py-3 text-sm text-amber-100"
+      role="alert"
+    >
+      <AlertTriangle className="size-4 shrink-0 text-amber-300" />
+      <span className="min-w-0 flex-1">{props.message}</span>
+      <Button onClick={props.onRetry} size="sm" type="button" variant="outline">
+        <RefreshCw />
+        {props.retryLabel}
+      </Button>
+    </div>
   );
 }
 
@@ -208,4 +272,8 @@ function formatCreatedAt(value: string, locale: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString(locale, { hour12: false });
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }

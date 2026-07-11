@@ -1,5 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 
+type E2eControls = {
+  failListAssets: boolean;
+  failListRuns: boolean;
+  listRunsCalls: number;
+  listRunsDelayMs: number;
+};
+
+const MOCK_RETRY_DELAY_MS = 500;
+
 test("creates a mocked video task and opens the completed run", async ({ page }) => {
   await installTauriMock(page);
   await page.goto("/");
@@ -24,6 +33,72 @@ test("creates a mocked video task and opens the completed run", async ({ page })
   await expect(page.getByText("final.mp4")).toBeVisible();
 });
 
+test("shows run list load and refresh failures without unhandled rejections", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await installTauriMock(page);
+  await page.goto("/");
+  await setMockFailures(page, { failListRuns: true });
+
+  await page.getByRole("button", { name: "Console", exact: true }).click();
+  await expect(page.getByText("Unable to load pipeline runs.")).toBeVisible();
+  await expect(page.getByText("Submit a task from the Wizard")).not.toBeVisible();
+
+  await setMockFailures(page, { failListRuns: false });
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByText("Submit a task from the Wizard")).toBeVisible();
+
+  await setMockFailures(page, { failListRuns: true });
+  const refreshWarning = page.getByRole("alert");
+  await expect(refreshWarning).toContainText(
+    "Refresh failed. Showing the last successful result: run list unavailable",
+    { timeout: 7000 }
+  );
+  await expect(page.getByText("Submit a task from the Wizard")).toBeVisible();
+  await setMockFailures(page, {
+    failListRuns: false,
+    listRunsDelayMs: MOCK_RETRY_DELAY_MS
+  });
+  const callsBeforeRetry = (await getMockControls(page)).listRunsCalls;
+  await refreshWarning.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect
+    .poll(async () => (await getMockControls(page)).listRunsCalls)
+    .toBeGreaterThan(callsBeforeRetry);
+  await expect(refreshWarning).toBeVisible();
+  await expect(refreshWarning).not.toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test("shows an asset library load failure and recovers on retry", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await installTauriMock(page);
+  await page.goto("/");
+  await setMockFailures(page, { failListAssets: true });
+
+  await page.getByRole("button", { name: "Asset Library", exact: true }).click();
+  await expect(page.getByText("Unable to load assets.")).toBeVisible();
+  await expect(page.getByText("No assets yet.")).not.toBeVisible();
+
+  await setMockFailures(page, { failListAssets: false });
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByText("No assets yet.")).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+async function setMockFailures(page: Page, failures: Partial<E2eControls>) {
+  await page.evaluate((nextFailures) => {
+    const controls = (window as Window & { __REPIX_E2E__: E2eControls }).__REPIX_E2E__;
+    Object.assign(controls, nextFailures);
+  }, failures);
+}
+
+async function getMockControls(page: Page) {
+  return page.evaluate(
+    () => (window as Window & { __REPIX_E2E__: E2eControls }).__REPIX_E2E__
+  );
+}
+
 async function installTauriMock(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem("LOCALE", "en");
@@ -43,6 +118,7 @@ async function installTauriMock(page: Page) {
     };
     type MockWindow = Window &
       typeof globalThis & {
+        __REPIX_E2E__: E2eControls;
         __TAURI_EVENT_PLUGIN_INTERNALS__: EventInternals;
         __TAURI_INTERNALS__: TauriInternals;
       };
@@ -52,6 +128,12 @@ async function installTauriMock(page: Page) {
     const eventListeners = new Map<string, Set<number>>();
     let nextCallbackId = 1;
     let createdTaskTitle = "";
+    const controls: E2eControls = {
+      failListAssets: false,
+      failListRuns: false,
+      listRunsCalls: 0,
+      listRunsDelayMs: 0
+    };
 
     const now = "2026-06-20T12:00:00.000Z";
     const taskId = "task-e2e-1";
@@ -185,6 +267,22 @@ async function installTauriMock(page: Page) {
             await new Promise((resolve) => window.setTimeout(resolve, 250));
           }
           return dashboardData();
+        case "list_runs":
+          controls.listRunsCalls += 1;
+          if (controls.failListRuns) {
+            throw new Error("run list unavailable");
+          }
+          if (controls.listRunsDelayMs > 0) {
+            await new Promise((resolve) => window.setTimeout(resolve, controls.listRunsDelayMs));
+          }
+          return [];
+        case "list_all_assets":
+          if (controls.failListAssets) {
+            throw new Error("asset list unavailable");
+          }
+          return [];
+        case "list_tasks":
+          return [];
         case "get_deepseek_balance":
           return {
             is_available: true,
@@ -293,6 +391,7 @@ async function installTauriMock(page: Page) {
       transformCallback,
       unregisterCallback
     };
+    mockWindow.__REPIX_E2E__ = controls;
     mockWindow.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
       unregisterListener: (_event: string, id: number) => unregisterCallback(id)
     };
