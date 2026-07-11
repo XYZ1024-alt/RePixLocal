@@ -35,10 +35,8 @@ pub fn run() {
                 tracing::warn!("failed to sync whisper runtime DLLs: {error}");
             }
             let app_state = app.state::<AppState>();
-            let workspace = app_state.workspace.root();
-            if let Err(error) = app.asset_protocol_scope().allow_directory(&workspace, true) {
-                tracing::warn!("failed to allow workspace in asset protocol: {error}");
-            }
+            app.asset_protocol_scope()
+                .allow_directory(app_state.workspace.tasks_dir(), true)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -82,6 +80,7 @@ pub fn run() {
 async fn initialize_state() -> errors::AppResult<AppState> {
     let workspace = workspace::Workspace::initialize().await?;
     let instance_lock = workspace::WorkspaceInstanceLock::acquire(&workspace)?;
+    secrets::initialize_secret_storage(&workspace.root())?;
     let config = config::load_or_create(&workspace).await?;
     let repo = db::Repository::initialize(&workspace).await?;
     let assets = storage::local_assets::AssetManager::new(workspace.clone());

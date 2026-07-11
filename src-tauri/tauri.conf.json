@@ -23,13 +23,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": {
-          "requireLiteralLeadingDot": false,
-          "allow": [
-            "$DATA/RePix/RePixLocal/data/**/*",
-            "$DATA/local/RePix/RePixLocal/**/*"
-          ]
-        }
+        "scope": []
       }
     }
   },

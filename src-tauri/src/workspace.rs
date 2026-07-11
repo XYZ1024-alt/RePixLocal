@@ -64,8 +64,12 @@ impl Workspace {
         self.root.join("config.json")
     }
 
+    pub fn tasks_dir(&self) -> PathBuf {
+        self.root.join("tasks")
+    }
+
     pub fn task_dir(&self, task_id: &str) -> PathBuf {
-        self.root.join("tasks").join(task_id)
+        self.tasks_dir().join(task_id)
     }
 
     pub async fn create_task_layout(&self, task_id: &str) -> AppResult<()> {
@@ -109,6 +113,18 @@ fn task_dirs(task_root: PathBuf) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tasks_dir_contains_only_task_assets() {
+        let root = std::env::temp_dir().join("repix-workspace-path-test");
+        let workspace = Workspace::from_root(root.clone());
+
+        assert_eq!(workspace.tasks_dir(), root.join("tasks"));
+        assert_eq!(
+            workspace.task_dir("task-1"),
+            root.join("tasks").join("task-1")
+        );
+    }
 
     #[test]
     fn instance_lock_is_exclusive_and_released_on_drop() {

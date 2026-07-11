@@ -19,7 +19,7 @@ base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 directories = "6"
 fs2 = "0.4"
-keyring = "3"
+keyring = { version = "3", features = ["windows-native"] }
 reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 rfd = { version = "0.15", default-features = false, features = ["tokio"] }
 serde = { version = "1", features = ["derive"] }
