@@ -115,8 +115,14 @@ export async function saveDashscopeCredential(input: DashscopeCredentialPayload)
   return invoke<void>("save_dashscope_credential", { input });
 }
 
-export async function listProviderModels(provider: string) {
-  return invoke<ProviderModelOption[]>("list_provider_models", { provider });
+export async function listProviderModels(
+  provider: string,
+  credentials?: { api_key: string; base_url: string }
+) {
+  return invoke<ProviderModelOption[]>("list_provider_models", {
+    provider,
+    credentials: credentials ?? null
+  });
 }
 
 export async function listAllAssets(taskId?: string) {

@@ -211,7 +211,7 @@ pub struct ProviderSettings {
     pub model: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderListingCredentials {
     pub api_key: String,
     pub base_url: String,

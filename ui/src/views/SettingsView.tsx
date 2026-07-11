@@ -561,27 +561,16 @@ function ProviderKeyCard(props: {
     setMessage(null);
 
     try {
-      if (key) {
-        try {
-          await saveProviderCredential({
-            provider: props.provider,
-            label: "default",
-            api_key: key,
-            base_url: baseUrl,
-            model: ""
-          });
-          setKeyChanged(false);
-        } catch {
-          setMessage({ type: "error", text: t("failedToSaveKey") });
-          return;
-        }
-      }
-
-      const fetched = await listProviderModels(props.provider);
+      const fetched = await listProviderModels(
+        props.provider,
+        key ? { api_key: key, base_url: baseUrl } : undefined
+      );
       if (fetched.length > 0) {
         setModels(fetched);
         setUseCustomModel(false);
-        setModel("");
+        setModel((current) =>
+          fetched.some((option) => option.id === current) ? current : fetched[0].id
+        );
         setMessage({ type: "success", text: t("modelsFetched") });
       } else {
         setModels(null);

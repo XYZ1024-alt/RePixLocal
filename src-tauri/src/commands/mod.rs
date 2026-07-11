@@ -2,14 +2,15 @@ use chrono::Utc;
 use tauri::{AppHandle, State};
 
 use crate::config::{save, AppConfig};
-use crate::errors::command_error;
+use crate::errors::{command_error, AppError, AppResult};
 use crate::media::whisper_models;
 use crate::models::{
     AppLog, Asset, CostSummary, CreateTaskInput, DashboardData, DashboardSummary,
     DashscopeCredentialInput, DashscopeCredentialView, DeepSeekBalance, PickedImageFile,
     PickedVideoFile, PipelineRun, PipelineStage, ProviderBalance, ProviderBalanceAccount,
-    ProviderBalanceStatus, ProviderCredentialInput, ProviderCredentialView, ProviderModelOption,
-    RunDetail, RunListItem, SubmitTaskResponse, Task, ToolCheck, WhisperModelStatus,
+    ProviderBalanceStatus, ProviderCredentialInput, ProviderCredentialView,
+    ProviderListingCredentials, ProviderModelOption, RunDetail, RunListItem, SubmitTaskResponse,
+    Task, ToolCheck, WhisperModelStatus,
 };
 use crate::providers::{
     deepseek::DeepSeekClient, model_catalog, validate_provider_config, ProviderConfig,
@@ -501,20 +502,44 @@ pub async fn save_dashscope_credential(
 #[tauri::command]
 pub async fn list_provider_models(
     provider: String,
+    credentials: Option<ProviderListingCredentials>,
     state: State<'_, AppState>,
 ) -> Result<Vec<ProviderModelOption>, String> {
     let mock = state.config.read().await.mock_providers;
     if mock {
         return Ok(model_catalog::mock_models(&provider));
     }
-    let creds = state
-        .repo
-        .get_provider_listing_credentials(&provider)
-        .await
-        .map_err(command_error)?;
+    let creds = match credentials {
+        Some(credentials) => {
+            normalize_listing_credentials(&provider, credentials).map_err(command_error)?
+        }
+        None => state
+            .repo
+            .get_provider_listing_credentials(&provider)
+            .await
+            .map_err(command_error)?,
+    };
     model_catalog::fetch_models(&provider, &creds)
         .await
         .map_err(command_error)
+}
+
+fn normalize_listing_credentials(
+    provider: &str,
+    credentials: ProviderListingCredentials,
+) -> AppResult<ProviderListingCredentials> {
+    let api_key = credentials.api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err(AppError::Provider(format!(
+            "{provider} API key not configured."
+        )));
+    }
+    let base_url = if credentials.base_url.trim().is_empty() {
+        crate::db::default_provider_base_url(provider).to_string()
+    } else {
+        credentials.base_url.trim().to_string()
+    };
+    Ok(ProviderListingCredentials { api_key, base_url })
 }
 
 #[tauri::command]
@@ -597,5 +622,34 @@ mod tests {
         }];
         let balance = seedance_provider_balance(&credentials);
         assert!(matches!(balance.status, ProviderBalanceStatus::Unsupported));
+    }
+
+    #[test]
+    fn listing_credentials_use_provider_default_without_persisting_a_model() {
+        let credentials = normalize_listing_credentials(
+            "DEEPSEEK",
+            ProviderListingCredentials {
+                api_key: "  temporary-key  ".to_string(),
+                base_url: "  ".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(credentials.api_key, "temporary-key");
+        assert_eq!(credentials.base_url, "https://api.deepseek.com");
+    }
+
+    #[test]
+    fn listing_credentials_reject_empty_temporary_key() {
+        let error = normalize_listing_credentials(
+            "DEEPSEEK",
+            ProviderListingCredentials {
+                api_key: "  ".to_string(),
+                base_url: "https://api.deepseek.com".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("API key not configured"));
     }
 }

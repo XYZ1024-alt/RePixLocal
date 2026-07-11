@@ -1647,7 +1647,7 @@ fn round_cost(value: f64) -> f64 {
     (value * 10000.0).round() / 10000.0
 }
 
-fn default_provider_base_url(provider: &str) -> &'static str {
+pub(crate) fn default_provider_base_url(provider: &str) -> &'static str {
     match provider.to_uppercase().as_str() {
         "DEEPSEEK" => "https://api.deepseek.com",
         "QWEN_VL" => "https://dashscope.aliyuncs.com/api/v1",
