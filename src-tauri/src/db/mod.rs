@@ -501,15 +501,14 @@ impl Repository {
     }
 
     pub async fn get_run_cost_summary(&self, run_id: &str) -> AppResult<CostSummary> {
-        let row = sqlx::query("SELECT task_id FROM runs WHERE id = ?")
-            .bind(run_id)
-            .fetch_optional(&self.pool)
-            .await?;
-        let Some(row) = row else {
-            return Ok(empty_cost_summary());
-        };
-        let task_id: String = row.try_get("task_id")?;
-        self.get_task_cost_summary(&task_id).await
+        let rows = sqlx::query(
+            "SELECT provider, unit, quantity, cost_usd, success FROM api_usage_logs \
+             WHERE run_id = ? ORDER BY created_at ASC",
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(summarize_usage_rows(&rows))
     }
 
     pub async fn run_task_id(&self, run_id: &str) -> AppResult<String> {
@@ -1589,14 +1588,6 @@ fn parse_context(value: Option<String>) -> AppResult<Option<Value>> {
         .map_err(Into::into)
 }
 
-fn empty_cost_summary() -> CostSummary {
-    CostSummary {
-        total_cost_usd: 0.0,
-        incomplete: false,
-        providers: Vec::new(),
-    }
-}
-
 fn summarize_usage_rows(rows: &[sqlx::sqlite::SqliteRow]) -> CostSummary {
     let mut groups: HashMap<String, ProviderCostSummary> = HashMap::new();
     for row in rows {
@@ -1737,6 +1728,64 @@ mod tests {
         repo.create_run(&task_id)
             .await
             .expect("restart after terminal run must be allowed");
+    }
+
+    #[tokio::test]
+    async fn run_cost_summary_excludes_other_runs_and_unassigned_usage() {
+        let (repo, _workspace) = test_repo().await;
+        let task_id = running_task(&repo).await;
+        let first = repo.create_run(&task_id).await.unwrap();
+        repo.insert_api_usage_log(
+            "FIRST",
+            Some(&task_id),
+            Some(&first.id),
+            "generate",
+            "tokens",
+            10.0,
+            Some(1.0),
+            true,
+        )
+        .await
+        .unwrap();
+        repo.cancel_active_run(&first.id, &task_id).await.unwrap();
+
+        let second = repo.create_run(&task_id).await.unwrap();
+        repo.insert_api_usage_log(
+            "SECOND",
+            Some(&task_id),
+            Some(&second.id),
+            "generate",
+            "tokens",
+            20.0,
+            Some(2.0),
+            true,
+        )
+        .await
+        .unwrap();
+        repo.insert_api_usage_log(
+            "UNASSIGNED",
+            Some(&task_id),
+            None,
+            "legacy",
+            "calls",
+            1.0,
+            Some(4.0),
+            true,
+        )
+        .await
+        .unwrap();
+
+        let first_summary = repo.get_run_cost_summary(&first.id).await.unwrap();
+        let second_summary = repo.get_run_cost_summary(&second.id).await.unwrap();
+
+        assert_eq!(first_summary.total_cost_usd, 1.0);
+        assert_eq!(first_summary.providers.len(), 1);
+        assert_eq!(first_summary.providers[0].provider, "FIRST");
+        assert_eq!(first_summary.providers[0].calls, 1);
+        assert_eq!(second_summary.total_cost_usd, 2.0);
+        assert_eq!(second_summary.providers.len(), 1);
+        assert_eq!(second_summary.providers[0].provider, "SECOND");
+        assert_eq!(second_summary.providers[0].calls, 1);
     }
 
     #[tokio::test]
