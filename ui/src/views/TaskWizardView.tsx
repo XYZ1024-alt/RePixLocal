@@ -97,7 +97,7 @@ export function TaskWizardView(props: {
   const [config, setConfig] = useState<TaskConfig>(DEFAULT_CONFIG);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
-  const busy = phase !== "idle" && phase !== "done";
+  const busy = phase !== "idle";
   const isImageTask = config.taskType === "image_to_video";
   const sourceReady = Boolean(
     title.trim() && (isImageTask ? images.length > 0 && config.requirements?.trim() : file)

@@ -13,6 +13,10 @@ test("creates a mocked video task and opens the completed run", async ({ page })
 
   await page.getByRole("button", { name: "Create & Run" }).click();
 
+  await expect(
+    page.getByRole("button", { name: "Done - redirecting...", exact: true })
+  ).toBeDisabled();
+
   await expect(page.getByRole("heading", { name: "source" })).toBeVisible();
   await expect(page.getByText("COMPLETED").first()).toBeVisible();
   await expect(page.getByText("Run completed. The final video")).toBeVisible();
@@ -177,6 +181,9 @@ async function installTauriMock(page: Page) {
             whisper_model_dir: "C:\\repix-e2e\\models\\whisper"
           };
         case "get_dashboard_data":
+          if (createdTaskTitle) {
+            await new Promise((resolve) => window.setTimeout(resolve, 250));
+          }
           return dashboardData();
         case "get_deepseek_balance":
           return {
