@@ -103,6 +103,7 @@ impl Repository {
             finished_at: None,
             created_at: Some(now),
         };
+        let mut transaction = self.pool.begin().await?;
         let result = sqlx::query(
             "INSERT INTO runs (id, task_id, status, current_stage, error, started_at, finished_at, created_at) \
              SELECT ?, ?, ?, NULL, NULL, ?, NULL, ? \
@@ -115,14 +116,69 @@ impl Repository {
         .bind(run.created_at.map(|value| value.to_rfc3339()))
         .bind(task_id)
         .bind(run_status_text(&RunStatus::Running))
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
         if result.rows_affected() == 0 {
             return Err(crate::errors::AppError::Workflow(
                 "task already has an active run".into(),
             ));
         }
+        let task_update = sqlx::query("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?")
+            .bind(status_text(&TaskStatus::Running))
+            .bind(now.to_rfc3339())
+            .bind(task_id)
+            .execute(&mut *transaction)
+            .await?;
+        if task_update.rows_affected() == 0 {
+            return Err(crate::errors::AppError::Workflow(format!(
+                "task not found: {task_id}"
+            )));
+        }
+        transaction.commit().await?;
         Ok(run)
+    }
+
+    pub async fn fail_run_startup(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        error: &str,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        let mut transaction = self.pool.begin().await?;
+        let result = sqlx::query(
+            "UPDATE runs SET status = ?, error = ?, finished_at = ? WHERE id = ? AND status = ?",
+        )
+        .bind(run_status_text(&RunStatus::Failed))
+        .bind(error)
+        .bind(&now)
+        .bind(run_id)
+        .bind(run_status_text(&RunStatus::Running))
+        .execute(&mut *transaction)
+        .await?;
+        if result.rows_affected() > 0 {
+            sqlx::query("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND status = ?")
+                .bind(status_text(&TaskStatus::Failed))
+                .bind(&now)
+                .bind(task_id)
+                .bind(status_text(&TaskStatus::Running))
+                .execute(&mut *transaction)
+                .await?;
+        }
+        sqlx::query(
+            "INSERT INTO logs (id, task_id, run_id, level, message, context_json, created_at) \
+             VALUES (?, ?, ?, ?, ?, NULL, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(task_id)
+        .bind(run_id)
+        .bind("error")
+        .bind(error)
+        .bind(&now)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(())
     }
 
     pub async fn get_run(&self, run_id: &str) -> AppResult<Option<RunDetail>> {
@@ -1509,6 +1565,35 @@ mod tests {
             .await
             .unwrap();
         task.id
+    }
+
+    #[tokio::test]
+    async fn startup_failure_keeps_run_and_task_consistent() {
+        let (repo, _workspace) = test_repo().await;
+        let task = repo
+            .create_task(CreateTaskInput {
+                title: "startup failure".into(),
+                source_path: "missing.mp4".into(),
+                config_json: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+
+        let run = repo.create_run(&task.id).await.unwrap();
+        let running_task = repo.get_task(&task.id).await.unwrap().unwrap();
+        assert!(matches!(running_task.status, TaskStatus::Running));
+
+        repo.fail_run_startup(&run.id, &task.id, "source file missing")
+            .await
+            .unwrap();
+
+        let failed_run = repo.latest_run(&task.id).await.unwrap().unwrap();
+        assert!(matches!(failed_run.status, RunStatus::Failed));
+        assert_eq!(failed_run.error.as_deref(), Some("source file missing"));
+        let failed_task = repo.get_task(&task.id).await.unwrap().unwrap();
+        assert!(matches!(failed_task.status, TaskStatus::Failed));
+        let logs = repo.list_run_logs(&run.id, 10).await.unwrap();
+        assert!(logs.iter().any(|log| log.message == "source file missing"));
     }
 
     #[tokio::test]

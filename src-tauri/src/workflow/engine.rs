@@ -41,34 +41,8 @@ impl WorkflowEngine {
 
     pub async fn start(&self, task_id: &str, app: &AppHandle) -> AppResult<PipelineRun> {
         let task = self.require_task(task_id).await?;
-        self.repo
-            .update_task_status(task_id, TaskStatus::Running)
-            .await?;
-        self.repo
-            .insert_log(Some(task_id), None, "info", "workflow started")
-            .await?;
-
-        match task.task_type {
-            WorkflowTaskType::Replicate => {
-                let source_asset = self
-                    .assets
-                    .import_source_video(task_id, &task.source_path)
-                    .await?;
-                self.repo.insert_asset(&source_asset).await?;
-            }
-            WorkflowTaskType::ImageToVideo => {
-                let image_paths = image_paths_from_config(&task.config_json)?;
-                let source_assets = self
-                    .assets
-                    .import_source_images(task_id, &image_paths)
-                    .await?;
-                for asset in source_assets {
-                    self.repo.insert_asset(&asset).await?;
-                }
-            }
-        }
-
         let run = self.repo.create_run(task_id).await?;
+        self.prepare_started_run(&task, &run).await?;
         emit_pipeline_event(
             app,
             PipelineEvent::Run {
@@ -95,6 +69,50 @@ impl WorkflowEngine {
         });
 
         Ok(run)
+    }
+
+    async fn prepare_started_run(
+        &self,
+        task: &crate::models::Task,
+        run: &PipelineRun,
+    ) -> AppResult<()> {
+        if let Err(error) = self.prepare_run(task, &run.id).await {
+            let message = error.to_string();
+            if let Err(persist_error) = self
+                .repo
+                .fail_run_startup(&run.id, &task.id, &message)
+                .await
+            {
+                return Err(crate::errors::AppError::Workflow(format!(
+                    "{message}; failed to persist startup failure: {persist_error}"
+                )));
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn prepare_run(&self, task: &crate::models::Task, run_id: &str) -> AppResult<()> {
+        self.repo
+            .insert_log(Some(&task.id), Some(run_id), "info", "workflow started")
+            .await?;
+        match task.task_type {
+            WorkflowTaskType::Replicate => {
+                let source = self
+                    .assets
+                    .import_source_video(&task.id, &task.source_path)
+                    .await?;
+                self.repo.insert_asset(&source).await
+            }
+            WorkflowTaskType::ImageToVideo => {
+                let paths = image_paths_from_config(&task.config_json)?;
+                let sources = self.assets.import_source_images(&task.id, &paths).await?;
+                for source in sources {
+                    self.repo.insert_asset(&source).await?;
+                }
+                Ok(())
+            }
+        }
     }
 
     pub async fn cancel(&self, task_id: &str, app: &AppHandle) -> AppResult<()> {
@@ -153,4 +171,47 @@ fn image_paths_from_config(config: &serde_json::Value) -> AppResult<Vec<String>>
         ));
     }
     Ok(image_paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{CreateTaskInput, RunStatus};
+    use crate::workspace::Workspace;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn missing_source_marks_started_run_failed() {
+        let (engine, repo) = test_engine().await;
+        let task = repo
+            .create_task(CreateTaskInput {
+                title: "missing source".into(),
+                source_path: "missing.mp4".into(),
+                config_json: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let run = repo.create_run(&task.id).await.unwrap();
+
+        let result = engine.prepare_started_run(&task, &run).await;
+
+        assert!(result.is_err());
+        let stored_run = repo.latest_run(&task.id).await.unwrap().unwrap();
+        assert!(matches!(stored_run.status, RunStatus::Failed));
+        let stored_task = repo.get_task(&task.id).await.unwrap().unwrap();
+        assert!(matches!(stored_task.status, TaskStatus::Failed));
+    }
+
+    async fn test_engine() -> (WorkflowEngine, Arc<Repository>) {
+        let root = std::env::temp_dir().join(format!("repix-engine-test-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let workspace = Workspace::from_root(root);
+        let repo = Arc::new(Repository::initialize(&workspace).await.unwrap());
+        let config = Arc::new(RwLock::new(AppConfig::default_for(&workspace)));
+        let assets = Arc::new(AssetManager::new(workspace));
+        let ffmpeg = Arc::new(FfmpegRunner::new(config.clone()));
+        let whisper = Arc::new(WhisperRunner::new(config.clone()));
+        let engine = WorkflowEngine::new(repo.clone(), assets, ffmpeg, whisper, config);
+        (engine, repo)
+    }
 }
