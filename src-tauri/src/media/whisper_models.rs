@@ -49,6 +49,22 @@ pub async fn get_download_state() -> DownloadState {
     download_state().read().await.clone()
 }
 
+fn begin_download(state: &mut DownloadState, model_name: &str) -> AppResult<()> {
+    if state.downloading {
+        return Err(AppError::Tool(format!(
+            "whisper model download already in progress: {}",
+            state.model_name
+        )));
+    }
+
+    state.downloading = true;
+    state.model_name = model_name.to_string();
+    state.bytes_done = 0;
+    state.bytes_total = None;
+    state.error = None;
+    Ok(())
+}
+
 pub async fn ensure_whisper_model(
     workspace: &Workspace,
     model_dir: Option<&str>,
@@ -64,21 +80,8 @@ pub async fn ensure_whisper_model(
 
     let state = download_state();
     {
-        let guard = state.read().await;
-        if guard.downloading && guard.model_name == model_name {
-            return Err(AppError::Tool(format!(
-                "whisper model download already in progress: {model_name}"
-            )));
-        }
-    }
-
-    {
         let mut guard = state.write().await;
-        guard.downloading = true;
-        guard.model_name = model_name.to_string();
-        guard.bytes_done = 0;
-        guard.bytes_total = None;
-        guard.error = None;
+        begin_download(&mut guard, model_name)?;
     }
 
     let result = download_model(&target, model_name).await;
@@ -177,5 +180,25 @@ pub fn model_status(
         bytes_done: 0,
         bytes_total: None,
         error: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_download_rejects_parallel_model_without_overwriting_state() {
+        let mut state = DownloadState::default();
+        begin_download(&mut state, "base").unwrap();
+
+        let error = begin_download(&mut state, "large").unwrap_err();
+
+        assert!(error.to_string().contains("base"));
+        assert!(state.downloading);
+        assert_eq!(state.model_name, "base");
+        assert_eq!(state.bytes_done, 0);
+        assert_eq!(state.bytes_total, None);
+        assert_eq!(state.error, None);
     }
 }
