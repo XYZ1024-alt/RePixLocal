@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::{json, Value};
+use tracing::debug;
 
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
@@ -56,6 +57,12 @@ impl CosyVoiceClient {
             "model": model,
             "input": input,
         });
+        debug!(
+            model = %model,
+            voice = %voice,
+            text_characters = trimmed.chars().count(),
+            "CosyVoice TTS request"
+        );
         let url = cosyvoice_synthesizer_url(&settings.base_url);
         let client = build_http_client(120)?;
         let response = client
