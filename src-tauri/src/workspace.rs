@@ -1,6 +1,8 @@
+use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
+use fs2::FileExt;
 use tokio::fs;
 
 use crate::errors::{AppError, AppResult};
@@ -8,6 +10,33 @@ use crate::errors::{AppError, AppResult};
 #[derive(Debug, Clone)]
 pub struct Workspace {
     root: PathBuf,
+}
+
+#[derive(Debug)]
+pub struct WorkspaceInstanceLock {
+    _file: File,
+}
+
+impl WorkspaceInstanceLock {
+    pub fn acquire(workspace: &Workspace) -> AppResult<Self> {
+        let lock_path = workspace.root.join(".instance.lock");
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)?;
+
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Ok(Self { _file: file }),
+            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+                Err(AppError::Workflow(
+                    "another RePix Local instance is already using this workspace".into(),
+                ))
+            }
+            Err(error) => Err(AppError::Filesystem(error)),
+        }
+    }
 }
 
 impl Workspace {
@@ -75,4 +104,30 @@ fn task_dirs(task_root: PathBuf) -> Vec<PathBuf> {
     .into_iter()
     .map(|name| task_root.join(name))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instance_lock_is_exclusive_and_released_on_drop() {
+        let root =
+            std::env::temp_dir().join(format!("repix-instance-lock-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::from_root(root.clone());
+
+        let first = WorkspaceInstanceLock::acquire(&workspace).unwrap();
+        let second = WorkspaceInstanceLock::acquire(&workspace).unwrap_err();
+        assert!(matches!(
+            second,
+            AppError::Workflow(message)
+                if message == "another RePix Local instance is already using this workspace"
+        ));
+
+        drop(first);
+        let reacquired = WorkspaceInstanceLock::acquire(&workspace).unwrap();
+        drop(reacquired);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

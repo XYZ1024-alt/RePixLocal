@@ -81,8 +81,15 @@ pub fn run() {
 
 async fn initialize_state() -> errors::AppResult<AppState> {
     let workspace = workspace::Workspace::initialize().await?;
+    let instance_lock = workspace::WorkspaceInstanceLock::acquire(&workspace)?;
     let config = config::load_or_create(&workspace).await?;
     let repo = db::Repository::initialize(&workspace).await?;
     let assets = storage::local_assets::AssetManager::new(workspace.clone());
-    Ok(AppState::new(workspace, config, repo, assets))
+    Ok(AppState::new(
+        workspace,
+        instance_lock,
+        config,
+        repo,
+        assets,
+    ))
 }

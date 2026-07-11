@@ -8,11 +8,12 @@ use crate::media::ffmpeg::FfmpegRunner;
 use crate::media::whisper::WhisperRunner;
 use crate::storage::local_assets::AssetManager;
 use crate::workflow::engine::WorkflowEngine;
-use crate::workspace::Workspace;
+use crate::workspace::{Workspace, WorkspaceInstanceLock};
 
 #[derive(Debug)]
 pub struct AppState {
     pub workspace: Workspace,
+    _instance_lock: WorkspaceInstanceLock,
     pub config: Arc<RwLock<AppConfig>>,
     pub repo: Arc<Repository>,
     pub workflow: WorkflowEngine,
@@ -23,6 +24,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(
         workspace: Workspace,
+        instance_lock: WorkspaceInstanceLock,
         config: AppConfig,
         repo: Repository,
         assets: AssetManager,
@@ -41,6 +43,7 @@ impl AppState {
         );
         Self {
             workspace,
+            _instance_lock: instance_lock,
             config,
             repo,
             workflow,
