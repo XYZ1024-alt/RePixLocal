@@ -17,7 +17,7 @@ use crate::media::subtitles::{
     segments_to_json, transcript_text,
 };
 use crate::media::whisper::WhisperRunner;
-use crate::models::{AssetType, Scene, StageType, Task, TaskStatus, WorkflowTaskType};
+use crate::models::{AssetType, Scene, StageType, Task, WorkflowTaskType};
 use crate::providers::cosyvoice::CosyVoiceClient;
 use crate::providers::deepseek::{DeepSeekClient, DeepSeekUsage};
 use crate::providers::fetch::download_to_file;
@@ -94,8 +94,7 @@ impl PipelineRunner {
         };
 
         for (order_index, stage) in ordered_stages(task_type).into_iter().enumerate() {
-            if self.is_canceled(task_id).await? {
-                self.cancel_pipeline(task_id, run_id, app).await?;
+            if !self.repo.run_is_active(run_id).await? {
                 return Ok(());
             }
             let result = self
@@ -112,9 +111,13 @@ impl PipelineRunner {
                 )
                 .await;
             if let Err(error) = result {
-                self.fail_pipeline(task_id, run_id, stage, &error.to_string(), app)
-                    .await?;
-                return Err(error);
+                if self
+                    .fail_pipeline(task_id, run_id, stage, &error.to_string(), app)
+                    .await?
+                {
+                    return Err(error);
+                }
+                return Ok(());
             }
         }
 
@@ -127,17 +130,6 @@ impl PipelineRunner {
                     run_id: run_id.to_string(),
                     task_id: task_id.to_string(),
                     status: "COMPLETED".to_string(),
-                },
-            );
-        } else {
-            self.log(task_id, run_id, app, "warn", "workflow canceled")
-                .await?;
-            emit_pipeline_event(
-                app,
-                PipelineEvent::Run {
-                    run_id: run_id.to_string(),
-                    task_id: task_id.to_string(),
-                    status: "CANCELLED".to_string(),
                 },
             );
         }
@@ -547,10 +539,7 @@ impl PipelineRunner {
         }
 
         for scene in scenes {
-            if self.is_canceled(task_id).await? {
-                self.cancel_pipeline(task_id, run_id, app).await?;
-                return Ok(());
-            }
+            self.ensure_run_active(run_id).await?;
             let index = scene.scene_index;
             let frame_path = self.assets.frame_path(task_id, index);
             if frame_path.exists() {
@@ -873,10 +862,7 @@ impl PipelineRunner {
         let scenes = self.scenes_for_run(task_id, run_id).await?;
 
         for index in 0..scene_count {
-            if self.is_canceled(task_id).await? {
-                self.cancel_pipeline(task_id, run_id, app).await?;
-                return Ok(());
-            }
+            self.ensure_run_active(run_id).await?;
             let scene = scenes
                 .iter()
                 .find(|scene| scene.scene_index == index)
@@ -1199,10 +1185,7 @@ impl PipelineRunner {
         let scene_index = scene.scene_index;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(SEGMENT_TIMEOUT_SECS);
         loop {
-            if self.is_canceled(task_id).await? {
-                self.cancel_pipeline(task_id, run_id, app).await?;
-                return Err(AppError::Workflow("workflow canceled".into()));
-            }
+            self.ensure_run_active(run_id).await?;
             let polled = match seedance.poll_segment(job_id).await {
                 Ok(result) => result,
                 Err(AppError::Provider(message)) if is_transient_provider_error(&message) => {
@@ -1291,21 +1274,6 @@ impl PipelineRunner {
             None,
         );
         self.repo.insert_asset(&final_video).await
-    }
-
-    async fn cancel_pipeline(&self, task_id: &str, run_id: &str, app: &AppHandle) -> AppResult<()> {
-        self.repo.cancel_run(run_id).await?;
-        self.log(task_id, run_id, app, "warn", "workflow canceled")
-            .await?;
-        emit_pipeline_event(
-            app,
-            PipelineEvent::Run {
-                run_id: run_id.to_string(),
-                task_id: task_id.to_string(),
-                status: "CANCELLED".to_string(),
-            },
-        );
-        Ok(())
     }
 
     async fn mock_transcript_stage(
@@ -1757,9 +1725,13 @@ impl PipelineRunner {
             .iter()
             .position(|value| value == stage)
             .unwrap_or(0) as i32;
-        self.repo
+        let started = self
+            .repo
             .start_stage(run_id, stage.clone(), order_index)
             .await?;
+        if !started {
+            return Err(run_stopped_error(run_id));
+        }
         emit_pipeline_event(
             app,
             PipelineEvent::Stage {
@@ -1777,7 +1749,9 @@ impl PipelineRunner {
         stage: &StageType,
         app: &AppHandle,
     ) -> AppResult<()> {
-        self.repo.complete_stage(run_id, stage.clone()).await?;
+        if !self.repo.complete_stage(run_id, stage.clone()).await? {
+            return Err(run_stopped_error(run_id));
+        }
         emit_pipeline_event(
             app,
             PipelineEvent::Stage {
@@ -1796,12 +1770,12 @@ impl PipelineRunner {
         stage: StageType,
         error: &str,
         app: &AppHandle,
-    ) -> AppResult<()> {
+    ) -> AppResult<bool> {
         if !self
             .mark_run_failed(task_id, run_id, stage.clone(), error)
             .await?
         {
-            return Ok(());
+            return Ok(false);
         }
         self.log(task_id, run_id, app, "error", error).await?;
         emit_pipeline_event(
@@ -1829,7 +1803,7 @@ impl PipelineRunner {
                 message: error.to_string(),
             },
         );
-        Ok(())
+        Ok(true)
     }
 
     async fn log(
@@ -1902,34 +1876,25 @@ impl PipelineRunner {
         stage: StageType,
         error: &str,
     ) -> AppResult<bool> {
-        if self.is_canceled(task_id).await? {
-            self.repo.cancel_run(run_id).await?;
-            return Ok(false);
-        }
-        self.repo.fail_run(run_id, stage, error).await?;
         self.repo
-            .update_task_status(task_id, TaskStatus::Failed)
-            .await?;
-        Ok(true)
+            .fail_run_if_active(run_id, task_id, stage, error)
+            .await
     }
 
     async fn settle_run_completion(&self, task_id: &str, run_id: &str) -> AppResult<bool> {
-        if self.is_canceled(task_id).await? {
-            self.repo.cancel_run(run_id).await?;
-            return Ok(false);
-        }
-        self.repo.complete_run(run_id, task_id).await?;
-        Ok(true)
+        self.repo.complete_run_if_active(run_id, task_id).await
     }
 
-    async fn is_canceled(&self, task_id: &str) -> AppResult<bool> {
-        let task = self
-            .repo
-            .get_task(task_id)
-            .await?
-            .ok_or_else(|| AppError::Workflow(format!("task not found: {task_id}")))?;
-        Ok(matches!(task.status, TaskStatus::Canceled))
+    async fn ensure_run_active(&self, run_id: &str) -> AppResult<()> {
+        if self.repo.run_is_active(run_id).await? {
+            return Ok(());
+        }
+        Err(run_stopped_error(run_id))
     }
+}
+
+fn run_stopped_error(run_id: &str) -> AppError {
+    AppError::Workflow(format!("workflow run is no longer active: {run_id}"))
 }
 
 fn transcript_outputs_ready(assets: &AssetManager, task_id: &str) -> bool {
@@ -2162,7 +2127,7 @@ fn keyframe_subtitle_region_ratio(config: &serde_json::Value) -> AppResult<Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{CreateTaskInput, RunStatus};
+    use crate::models::{CreateTaskInput, RunStatus, TaskStatus};
 
     #[test]
     fn generated_segment_usage_seconds_rejects_invalid_values() {
@@ -2315,10 +2280,7 @@ mod tests {
 
     async fn canceled_task_with_run(repo: &Repository) -> (String, String) {
         let (task_id, run_id) = task_with_run(repo).await;
-        repo.update_task_status(&task_id, TaskStatus::Canceled)
-            .await
-            .unwrap();
-        repo.cancel_run(&run_id).await.unwrap();
+        repo.cancel_active_run(&run_id, &task_id).await.unwrap();
         (task_id, run_id)
     }
 

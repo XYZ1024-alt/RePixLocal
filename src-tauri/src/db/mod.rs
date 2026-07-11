@@ -534,7 +534,17 @@ impl Repository {
         run_id: &str,
         stage: StageType,
         order_index: i32,
-    ) -> AppResult<()> {
+    ) -> AppResult<bool> {
+        let mut transaction = self.pool.begin().await?;
+        let active = sqlx::query("UPDATE runs SET current_stage = ? WHERE id = ? AND status = ?")
+            .bind(stage_type_text(&stage))
+            .bind(run_id)
+            .bind(run_status_text(&RunStatus::Running))
+            .execute(&mut *transaction)
+            .await?;
+        if active.rows_affected() == 0 {
+            return Ok(false);
+        }
         sqlx::query(
             "INSERT INTO stages (id, run_id, stage_type, status, error, order_index, started_at, finished_at) \
              VALUES (?, ?, ?, ?, NULL, ?, ?, NULL)",
@@ -545,44 +555,153 @@ impl Repository {
         .bind(stage_status_text(&StageStatus::Running))
         .bind(order_index)
         .bind(Utc::now().to_rfc3339())
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        self.update_run_stage(run_id, Some(stage), RunStatus::Running, None)
-            .await
+        transaction.commit().await?;
+        Ok(true)
     }
 
-    pub async fn fail_run(&self, run_id: &str, stage: StageType, error: &str) -> AppResult<()> {
-        sqlx::query("UPDATE stages SET status = ?, error = ?, finished_at = ? WHERE run_id = ? AND stage_type = ?")
-            .bind(stage_status_text(&StageStatus::Failed))
-            .bind(error)
-            .bind(Utc::now().to_rfc3339())
-            .bind(run_id)
+    pub async fn complete_stage(&self, run_id: &str, stage: StageType) -> AppResult<bool> {
+        let now = Utc::now().to_rfc3339();
+        let mut transaction = self.pool.begin().await?;
+        let active = sqlx::query("UPDATE runs SET current_stage = ? WHERE id = ? AND status = ?")
             .bind(stage_type_text(&stage))
-            .execute(&self.pool)
+            .bind(run_id)
+            .bind(run_status_text(&RunStatus::Running))
+            .execute(&mut *transaction)
             .await?;
-        self.update_run_stage(run_id, Some(stage), RunStatus::Failed, Some(error))
-            .await
-    }
-
-    pub async fn complete_stage(&self, run_id: &str, stage: StageType) -> AppResult<()> {
-        sqlx::query(
-            "UPDATE stages SET status = ?, finished_at = ? WHERE run_id = ? AND stage_type = ?",
+        if active.rows_affected() == 0 {
+            return Ok(false);
+        }
+        let stage_update = sqlx::query(
+            "UPDATE stages SET status = ?, finished_at = ? \
+             WHERE run_id = ? AND stage_type = ? AND status = ?",
         )
         .bind(stage_status_text(&StageStatus::Completed))
-        .bind(Utc::now().to_rfc3339())
+        .bind(&now)
         .bind(run_id)
         .bind(stage_type_text(&stage))
-        .execute(&self.pool)
+        .bind(stage_status_text(&StageStatus::Running))
+        .execute(&mut *transaction)
         .await?;
-        self.update_run_stage(run_id, Some(stage), RunStatus::Running, None)
+        if stage_update.rows_affected() == 0 {
+            return Err(crate::errors::AppError::Workflow(format!(
+                "running stage not found: {}",
+                stage_type_text(&stage)
+            )));
+        }
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn fail_run_if_active(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        stage: StageType,
+        error: &str,
+    ) -> AppResult<bool> {
+        let now = Utc::now().to_rfc3339();
+        let mut transaction = self.pool.begin().await?;
+        let active = sqlx::query(
+            "UPDATE runs SET status = ?, current_stage = ?, error = ?, finished_at = ? \
+             WHERE id = ? AND task_id = ? AND status = ?",
+        )
+        .bind(run_status_text(&RunStatus::Failed))
+        .bind(stage_type_text(&stage))
+        .bind(error)
+        .bind(&now)
+        .bind(run_id)
+        .bind(task_id)
+        .bind(run_status_text(&RunStatus::Running))
+        .execute(&mut *transaction)
+        .await?;
+        if active.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query(
+            "UPDATE stages SET status = ?, error = ?, finished_at = ? \
+             WHERE run_id = ? AND stage_type = ? AND status = ?",
+        )
+        .bind(stage_status_text(&StageStatus::Failed))
+        .bind(error)
+        .bind(&now)
+        .bind(run_id)
+        .bind(stage_type_text(&stage))
+        .bind(stage_status_text(&StageStatus::Running))
+        .execute(&mut *transaction)
+        .await?;
+        let task_update =
+            sqlx::query("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND status = ?")
+                .bind(status_text(&TaskStatus::Failed))
+                .bind(&now)
+                .bind(task_id)
+                .bind(status_text(&TaskStatus::Running))
+                .execute(&mut *transaction)
+                .await?;
+        if task_update.rows_affected() == 0 {
+            return Err(crate::errors::AppError::Workflow(format!(
+                "active task not found for run: {run_id}"
+            )));
+        }
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn complete_run_if_active(&self, run_id: &str, task_id: &str) -> AppResult<bool> {
+        self.finish_run_if_active(run_id, task_id, RunStatus::Completed, TaskStatus::Completed)
             .await
     }
 
-    pub async fn complete_run(&self, run_id: &str, task_id: &str) -> AppResult<()> {
-        self.update_run_stage(run_id, None, RunStatus::Completed, None)
+    pub async fn cancel_active_run(&self, run_id: &str, task_id: &str) -> AppResult<bool> {
+        let now = Utc::now().to_rfc3339();
+        let mut transaction = self.pool.begin().await?;
+        let active = sqlx::query(
+            "UPDATE runs SET status = ?, current_stage = NULL, finished_at = ? \
+             WHERE id = ? AND task_id = ? AND status = ?",
+        )
+        .bind(run_status_text(&RunStatus::Canceled))
+        .bind(&now)
+        .bind(run_id)
+        .bind(task_id)
+        .bind(run_status_text(&RunStatus::Running))
+        .execute(&mut *transaction)
+        .await?;
+        if active.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query(
+            "UPDATE stages SET status = ?, finished_at = ? WHERE run_id = ? AND status = ?",
+        )
+        .bind(stage_status_text(&StageStatus::Canceled))
+        .bind(&now)
+        .bind(run_id)
+        .bind(stage_status_text(&StageStatus::Running))
+        .execute(&mut *transaction)
+        .await?;
+        let task_update =
+            sqlx::query("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND status = ?")
+                .bind(status_text(&TaskStatus::Canceled))
+                .bind(&now)
+                .bind(task_id)
+                .bind(status_text(&TaskStatus::Running))
+                .execute(&mut *transaction)
+                .await?;
+        if task_update.rows_affected() == 0 {
+            return Err(crate::errors::AppError::Workflow(format!(
+                "active task not found for run: {run_id}"
+            )));
+        }
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn run_is_active(&self, run_id: &str) -> AppResult<bool> {
+        let status: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id = ?")
+            .bind(run_id)
+            .fetch_optional(&self.pool)
             .await?;
-        self.update_task_status(task_id, TaskStatus::Completed)
-            .await
+        Ok(status.as_deref() == Some(run_status_text(&RunStatus::Running)))
     }
 
     pub async fn insert_scene(&self, scene: &Scene) -> AppResult<()> {
@@ -657,21 +776,6 @@ impl Repository {
         scenes.retain(|scene| scene.run_id == latest_run_id);
         scenes.sort_by_key(|scene| scene.scene_index);
         Ok(scenes)
-    }
-
-    pub async fn cancel_run(&self, run_id: &str) -> AppResult<()> {
-        sqlx::query(
-            "UPDATE stages SET status = ?, finished_at = ? \
-             WHERE run_id = ? AND status = ?",
-        )
-        .bind(stage_status_text(&StageStatus::Canceled))
-        .bind(Utc::now().to_rfc3339())
-        .bind(run_id)
-        .bind(stage_status_text(&StageStatus::Running))
-        .execute(&self.pool)
-        .await?;
-        self.update_run_stage(run_id, None, RunStatus::Canceled, None)
-            .await
     }
 
     pub async fn count_scenes(&self, run_id: &str) -> AppResult<i64> {
@@ -870,22 +974,44 @@ impl Repository {
         Ok(())
     }
 
-    async fn update_run_stage(
+    async fn finish_run_if_active(
         &self,
         run_id: &str,
-        stage: Option<StageType>,
-        status: RunStatus,
-        error: Option<&str>,
-    ) -> AppResult<()> {
-        sqlx::query("UPDATE runs SET status = ?, current_stage = ?, error = ?, finished_at = ? WHERE id = ?")
-            .bind(run_status_text(&status))
-            .bind(stage.as_ref().map(stage_type_text))
-            .bind(error)
-            .bind(finished_at(&status))
-            .bind(run_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+        task_id: &str,
+        run_status: RunStatus,
+        task_status: TaskStatus,
+    ) -> AppResult<bool> {
+        let now = Utc::now().to_rfc3339();
+        let mut transaction = self.pool.begin().await?;
+        let run_update = sqlx::query(
+            "UPDATE runs SET status = ?, current_stage = NULL, error = NULL, finished_at = ? \
+             WHERE id = ? AND task_id = ? AND status = ?",
+        )
+        .bind(run_status_text(&run_status))
+        .bind(&now)
+        .bind(run_id)
+        .bind(task_id)
+        .bind(run_status_text(&RunStatus::Running))
+        .execute(&mut *transaction)
+        .await?;
+        if run_update.rows_affected() == 0 {
+            return Ok(false);
+        }
+        let task_update =
+            sqlx::query("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND status = ?")
+                .bind(status_text(&task_status))
+                .bind(&now)
+                .bind(task_id)
+                .bind(status_text(&TaskStatus::Running))
+                .execute(&mut *transaction)
+                .await?;
+        if task_update.rows_affected() == 0 {
+            return Err(crate::errors::AppError::Workflow(format!(
+                "active task not found for run: {run_id}"
+            )));
+        }
+        transaction.commit().await?;
+        Ok(true)
     }
 
     async fn count_tasks(&self, status: Option<&str>) -> AppResult<i64> {
@@ -1293,13 +1419,6 @@ fn stage_type_text(stage: &StageType) -> &'static str {
     }
 }
 
-fn finished_at(status: &RunStatus) -> Option<String> {
-    match status {
-        RunStatus::Running => None,
-        _ => Some(Utc::now().to_rfc3339()),
-    }
-}
-
 fn parse_task_status(value: String) -> TaskStatus {
     match value.as_str() {
         "running" => TaskStatus::Running,
@@ -1613,11 +1732,141 @@ mod tests {
         let task_id = running_task(&repo).await;
 
         let first = repo.create_run(&task_id).await.unwrap();
-        repo.cancel_run(&first.id).await.unwrap();
+        repo.cancel_active_run(&first.id, &task_id).await.unwrap();
 
         repo.create_run(&task_id)
             .await
             .expect("restart after terminal run must be allowed");
+    }
+
+    #[tokio::test]
+    async fn canceled_run_cannot_complete_its_stage() {
+        let (repo, _workspace) = test_repo().await;
+        let task_id = running_task(&repo).await;
+        let run = repo.create_run(&task_id).await.unwrap();
+        assert!(repo
+            .start_stage(&run.id, StageType::SegmentGeneration, 0)
+            .await
+            .unwrap());
+
+        assert!(repo.cancel_active_run(&run.id, &task_id).await.unwrap());
+        assert!(!repo
+            .complete_stage(&run.id, StageType::SegmentGeneration)
+            .await
+            .unwrap());
+
+        let stored_run = repo.get_run(&run.id).await.unwrap().unwrap();
+        assert_eq!(stored_run.status, "CANCELLED");
+        let stages = repo.list_run_stages(&run.id).await.unwrap();
+        assert!(matches!(stages[0].status, StageStatus::Canceled));
+        let task = repo.get_task(&task_id).await.unwrap().unwrap();
+        assert!(matches!(task.status, TaskStatus::Canceled));
+    }
+
+    #[tokio::test]
+    async fn cancel_and_complete_choose_one_consistent_terminal_state() {
+        let (repo, _workspace) = test_repo().await;
+        let repo = std::sync::Arc::new(repo);
+        let task_id = running_task(&repo).await;
+        let run = repo.create_run(&task_id).await.unwrap();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+
+        let cancel = tokio::spawn({
+            let repo = repo.clone();
+            let barrier = barrier.clone();
+            let task_id = task_id.clone();
+            let run_id = run.id.clone();
+            async move {
+                barrier.wait().await;
+                repo.cancel_active_run(&run_id, &task_id).await.unwrap()
+            }
+        });
+        let complete = tokio::spawn({
+            let repo = repo.clone();
+            let barrier = barrier.clone();
+            let task_id = task_id.clone();
+            let run_id = run.id.clone();
+            async move {
+                barrier.wait().await;
+                repo.complete_run_if_active(&run_id, &task_id)
+                    .await
+                    .unwrap()
+            }
+        });
+        barrier.wait().await;
+
+        let cancel_applied = cancel.await.unwrap();
+        let complete_applied = complete.await.unwrap();
+        assert_ne!(cancel_applied, complete_applied);
+        assert_run_and_task_terminal_state_matches(&repo, &task_id, &run.id).await;
+    }
+
+    #[tokio::test]
+    async fn cancel_and_failure_choose_one_consistent_terminal_state() {
+        let (repo, _workspace) = test_repo().await;
+        let repo = std::sync::Arc::new(repo);
+        let task_id = running_task(&repo).await;
+        let run = repo.create_run(&task_id).await.unwrap();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+
+        let cancel = tokio::spawn({
+            let repo = repo.clone();
+            let barrier = barrier.clone();
+            let task_id = task_id.clone();
+            let run_id = run.id.clone();
+            async move {
+                barrier.wait().await;
+                repo.cancel_active_run(&run_id, &task_id).await.unwrap()
+            }
+        });
+        let fail = tokio::spawn({
+            let repo = repo.clone();
+            let barrier = barrier.clone();
+            let task_id = task_id.clone();
+            let run_id = run.id.clone();
+            async move {
+                barrier.wait().await;
+                repo.fail_run_if_active(&run_id, &task_id, StageType::SegmentGeneration, "boom")
+                    .await
+                    .unwrap()
+            }
+        });
+        barrier.wait().await;
+
+        let cancel_applied = cancel.await.unwrap();
+        let fail_applied = fail.await.unwrap();
+        assert_ne!(cancel_applied, fail_applied);
+        assert_run_and_task_terminal_state_matches(&repo, &task_id, &run.id).await;
+    }
+
+    #[tokio::test]
+    async fn terminal_old_run_cannot_overwrite_restarted_task() {
+        let (repo, _workspace) = test_repo().await;
+        let task_id = running_task(&repo).await;
+        let old_run = repo.create_run(&task_id).await.unwrap();
+        assert!(repo.cancel_active_run(&old_run.id, &task_id).await.unwrap());
+        let new_run = repo.create_run(&task_id).await.unwrap();
+
+        assert!(!repo
+            .fail_run_if_active(
+                &old_run.id,
+                &task_id,
+                StageType::SegmentGeneration,
+                "late failure",
+            )
+            .await
+            .unwrap());
+        assert!(!repo
+            .complete_run_if_active(&old_run.id, &task_id)
+            .await
+            .unwrap());
+
+        let old = repo.get_run(&old_run.id).await.unwrap().unwrap();
+        assert_eq!(old.status, "CANCELLED");
+        let new = repo.get_run(&new_run.id).await.unwrap().unwrap();
+        assert_eq!(new.status, "RUNNING");
+        let task = repo.get_task(&task_id).await.unwrap().unwrap();
+        assert!(matches!(task.status, TaskStatus::Running));
     }
 
     #[tokio::test]
@@ -1633,5 +1882,20 @@ mod tests {
         assert_eq!(stale_run.id, run.id);
         let task = reopened.get_task(&task_id).await.unwrap().unwrap();
         assert!(matches!(task.status, TaskStatus::Failed));
+    }
+
+    async fn assert_run_and_task_terminal_state_matches(
+        repo: &Repository,
+        task_id: &str,
+        run_id: &str,
+    ) {
+        let run = repo.get_run(run_id).await.unwrap().unwrap();
+        let task = repo.get_task(task_id).await.unwrap().unwrap();
+        match run.status.as_str() {
+            "COMPLETED" => assert!(matches!(task.status, TaskStatus::Completed)),
+            "FAILED" => assert!(matches!(task.status, TaskStatus::Failed)),
+            "CANCELLED" => assert!(matches!(task.status, TaskStatus::Canceled)),
+            status => panic!("unexpected terminal run status: {status}"),
+        }
     }
 }
