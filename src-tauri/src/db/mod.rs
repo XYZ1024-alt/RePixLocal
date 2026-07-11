@@ -567,6 +567,14 @@ impl Repository {
         Ok(())
     }
 
+    pub async fn delete_scenes_for_run(&self, run_id: &str) -> AppResult<()> {
+        sqlx::query("DELETE FROM scenes WHERE run_id = ?")
+            .bind(run_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn list_scenes(&self, run_id: &str) -> AppResult<Vec<Scene>> {
         let rows = sqlx::query("SELECT * FROM scenes WHERE run_id = ? ORDER BY scene_index ASC")
             .bind(run_id)

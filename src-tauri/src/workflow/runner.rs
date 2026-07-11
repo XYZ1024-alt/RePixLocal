@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -362,7 +363,10 @@ impl PipelineRunner {
     ) -> AppResult<()> {
         self.begin_stage(run_id, &StageType::ScriptRewrite, app)
             .await?;
-        if rewrite_outputs_ready(&self.assets, task_id, scene_count).await? {
+        if self
+            .rewrite_outputs_ready(task_id, run_id, scene_count)
+            .await?
+        {
             self.log(
                 task_id,
                 run_id,
@@ -487,6 +491,8 @@ impl PipelineRunner {
         self.record_deepseek_usage(task_id, run_id, output.usage)
             .await?;
 
+        validate_scene_indices(&output.value, scene_count)?;
+        self.repo.delete_scenes_for_run(run_id).await?;
         for scene in output.value {
             let metadata_json = Some(json!({
                 "keyframePath": scene.keyframe_path,
@@ -617,7 +623,10 @@ impl PipelineRunner {
     ) -> AppResult<()> {
         self.begin_stage(run_id, &StageType::ScriptPlanning, app)
             .await?;
-        if script_planning_outputs_ready(&self.assets, task_id, scene_count).await? {
+        if self
+            .script_planning_outputs_ready(task_id, run_id, scene_count)
+            .await?
+        {
             self.log(
                 task_id,
                 run_id,
@@ -685,6 +694,8 @@ impl PipelineRunner {
         self.record_deepseek_usage(task_id, run_id, output.usage)
             .await?;
 
+        validate_scene_indices(&output.value, scene_count)?;
+        self.repo.delete_scenes_for_run(run_id).await?;
         for scene in output.value {
             let source_image = self.assets.source_image_path(task_id, scene.index);
             let frame_path = self.assets.frame_path(task_id, scene.index);
@@ -930,7 +941,7 @@ impl PipelineRunner {
             )
             .await?;
             let video_url = self
-                .poll_segment_with_cancel(task_id, run_id, app, &seedance, &job_id, index)
+                .poll_segment_with_cancel(task_id, run_id, app, &seedance, &job_id, scene)
                 .await?;
             download_to_file(&video_url, &segment_path).await?;
             if self.ffmpeg.is_video_black(&segment_path).await? {
@@ -1133,6 +1144,43 @@ impl PipelineRunner {
         self.repo.list_scenes_for_task(task_id).await
     }
 
+    async fn rewrite_outputs_ready(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        scene_count: i32,
+    ) -> AppResult<bool> {
+        if !rewrite_files_ready(&self.assets, task_id, scene_count) {
+            return Ok(false);
+        }
+        self.scene_outputs_ready(task_id, run_id, scene_count).await
+    }
+
+    async fn script_planning_outputs_ready(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        scene_count: i32,
+    ) -> AppResult<bool> {
+        if !script_planning_files_ready(&self.assets, task_id, scene_count) {
+            return Ok(false);
+        }
+        self.scene_outputs_ready(task_id, run_id, scene_count).await
+    }
+
+    async fn scene_outputs_ready(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        scene_count: i32,
+    ) -> AppResult<bool> {
+        let scenes = self.scenes_for_run(task_id, run_id).await?;
+        Ok(scene_indices_complete(
+            scenes.iter().map(|scene| scene.scene_index),
+            scene_count,
+        ))
+    }
+
     async fn poll_segment_with_cancel(
         &self,
         task_id: &str,
@@ -1140,7 +1188,7 @@ impl PipelineRunner {
         app: &AppHandle,
         seedance: &SeedanceClient,
         job_id: &str,
-        scene_index: i32,
+        scene: &Scene,
     ) -> AppResult<String> {
         use std::time::Duration;
         use tokio::time::sleep;
@@ -1148,6 +1196,7 @@ impl PipelineRunner {
         const SEGMENT_POLL_INTERVAL_SECS: u64 = 10;
         const SEGMENT_TIMEOUT_SECS: u64 = 1800;
 
+        let scene_index = scene.scene_index;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(SEGMENT_TIMEOUT_SECS);
         loop {
             if self.is_canceled(task_id).await? {
@@ -1175,15 +1224,23 @@ impl PipelineRunner {
                     sleep(Duration::from_secs(SEGMENT_POLL_INTERVAL_SECS)).await;
                     continue;
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    self.clear_seedance_job_id(scene).await?;
+                    return Err(error);
+                }
             };
             match polled.status {
                 SegmentPollStatus::Ready => {
-                    return polled.source_url.ok_or_else(|| {
-                        AppError::Provider("Seedance returned READY without video URL".into())
-                    });
+                    if let Some(url) = polled.source_url {
+                        return Ok(url);
+                    }
+                    self.clear_seedance_job_id(scene).await?;
+                    return Err(AppError::Provider(
+                        "Seedance returned READY without video URL".into(),
+                    ));
                 }
                 SegmentPollStatus::Failed => {
+                    self.clear_seedance_job_id(scene).await?;
                     return Err(AppError::Provider(format!(
                         "Scene {scene_index}: segment generation failed"
                     )));
@@ -1198,6 +1255,18 @@ impl PipelineRunner {
                 }
             }
         }
+    }
+
+    async fn clear_seedance_job_id(&self, scene: &Scene) -> AppResult<()> {
+        let mut metadata = scene.metadata_json.clone().unwrap_or_else(|| json!({}));
+        let object = metadata.as_object_mut().ok_or_else(|| {
+            AppError::Workflow(format!(
+                "Scene {} metadata is not an object",
+                scene.scene_index
+            ))
+        })?;
+        object.remove("seedanceJobId");
+        self.repo.update_scene_metadata(&scene.id, &metadata).await
     }
 
     async fn ensure_final_video_asset(
@@ -1867,17 +1936,13 @@ fn transcript_outputs_ready(assets: &AssetManager, task_id: &str) -> bool {
     assets.audio_path(task_id).exists() && assets.subtitle_path(task_id).exists()
 }
 
-async fn rewrite_outputs_ready(
-    assets: &AssetManager,
-    task_id: &str,
-    scene_count: i32,
-) -> AppResult<bool> {
+fn rewrite_files_ready(assets: &AssetManager, task_id: &str, scene_count: i32) -> bool {
     for index in 0..scene_count {
         if !assets.keyframe_path(task_id, index).exists() {
-            return Ok(false);
+            return false;
         }
     }
-    Ok(assets.subtitle_path(task_id).exists())
+    assets.subtitle_path(task_id).exists()
 }
 
 fn scene_count_from_config(config: &serde_json::Value, task_type: WorkflowTaskType) -> i32 {
@@ -1923,17 +1988,37 @@ fn requirements_from_config(config: &serde_json::Value) -> AppResult<String> {
         .ok_or_else(|| AppError::Workflow("image_to_video task requires requirements".into()))
 }
 
-async fn script_planning_outputs_ready(
-    assets: &AssetManager,
-    task_id: &str,
-    scene_count: i32,
-) -> AppResult<bool> {
+fn script_planning_files_ready(assets: &AssetManager, task_id: &str, scene_count: i32) -> bool {
     for index in 0..scene_count {
         if !assets.frame_path(task_id, index).exists() {
-            return Ok(false);
+            return false;
         }
     }
-    Ok(true)
+    true
+}
+
+fn validate_scene_indices(
+    scenes: &[crate::models::RewrittenScene],
+    expected_count: i32,
+) -> AppResult<()> {
+    if scene_indices_complete(scenes.iter().map(|scene| scene.index), expected_count) {
+        return Ok(());
+    }
+    Err(AppError::Provider(format!(
+        "provider returned incomplete scene indices; expected exactly 0..{}",
+        expected_count.saturating_sub(1)
+    )))
+}
+
+fn scene_indices_complete(indices: impl Iterator<Item = i32>, expected_count: i32) -> bool {
+    if expected_count <= 0 {
+        return false;
+    }
+    let indices: Vec<i32> = indices.collect();
+    let unique: HashSet<i32> = indices.iter().copied().collect();
+    indices.len() == expected_count as usize
+        && unique.len() == expected_count as usize
+        && (0..expected_count).all(|index| unique.contains(&index))
 }
 
 fn tts_outputs_ready(assets: &AssetManager, task_id: &str, scene_count: i32) -> bool {
@@ -2108,6 +2193,15 @@ mod tests {
         assert_eq!(img2img_strength_for_tone("unknown"), 0.35);
     }
 
+    #[test]
+    fn scene_indices_require_exact_complete_range() {
+        assert!(scene_indices_complete([0, 1, 2].into_iter(), 3));
+        assert!(!scene_indices_complete([0, 2].into_iter(), 3));
+        assert!(!scene_indices_complete([0, 1, 1].into_iter(), 3));
+        assert!(!scene_indices_complete([0, 1, 3].into_iter(), 3));
+        assert!(!scene_indices_complete([0, 1, 2, 2].into_iter(), 3));
+    }
+
     fn scene_with_metadata(metadata: Option<serde_json::Value>) -> Scene {
         Scene {
             id: "scene-1".into(),
@@ -2167,6 +2261,56 @@ mod tests {
             .unwrap();
         let run = repo.create_run(&task.id).await.unwrap();
         (task.id, run.id)
+    }
+
+    #[tokio::test]
+    async fn rewrite_checkpoint_requires_complete_scenes() {
+        let (runner, repo) = test_runner().await;
+        let (task_id, run_id) = task_with_run(&repo).await;
+        runner
+            .assets
+            .write_minimal_png(&runner.assets.keyframe_path(&task_id, 0))
+            .await
+            .unwrap();
+        runner
+            .assets
+            .write_subtitle_json(&runner.assets.subtitle_path(&task_id), &json!([]))
+            .await
+            .unwrap();
+
+        assert!(!runner
+            .rewrite_outputs_ready(&task_id, &run_id, 1)
+            .await
+            .unwrap());
+
+        let mut scene = scene_with_metadata(None);
+        scene.task_id = task_id.clone();
+        scene.run_id = Some(run_id.clone());
+        repo.insert_scene(&scene).await.unwrap();
+        assert!(runner
+            .rewrite_outputs_ready(&task_id, &run_id, 1)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn clearing_failed_seedance_job_preserves_other_metadata() {
+        let (runner, repo) = test_runner().await;
+        let (task_id, run_id) = task_with_run(&repo).await;
+        let mut scene = scene_with_metadata(Some(json!({
+            "seedanceJobId": "dead-job",
+            "ttsDurationMs": 1200
+        })));
+        scene.task_id = task_id;
+        scene.run_id = Some(run_id.clone());
+        repo.insert_scene(&scene).await.unwrap();
+
+        runner.clear_seedance_job_id(&scene).await.unwrap();
+
+        let stored = repo.list_scenes(&run_id).await.unwrap().remove(0);
+        let metadata = stored.metadata_json.unwrap();
+        assert!(metadata.get("seedanceJobId").is_none());
+        assert_eq!(metadata["ttsDurationMs"], 1200);
     }
 
     async fn canceled_task_with_run(repo: &Repository) -> (String, String) {
