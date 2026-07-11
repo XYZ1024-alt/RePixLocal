@@ -16,6 +16,13 @@ const SUBMIT_TIMEOUT_SECS: u64 = 120;
 const POLL_REQUEST_TIMEOUT_SECS: u64 = 60;
 const TRANSIENT_RETRY_ATTEMPTS: usize = 3;
 const TRANSIENT_RETRY_BASE_DELAY_MS: u64 = 500;
+
+#[derive(Debug, Clone, Copy)]
+enum RetryPolicy {
+    Never,
+    Transient { attempts: usize },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SegmentPollStatus {
     Pending,
@@ -60,7 +67,7 @@ impl SeedanceClient {
         });
         let url = format!("{base_url}/contents/generations/tasks");
         let api_key = settings.api_key.clone();
-        let response = retry_transient(TRANSIENT_RETRY_ATTEMPTS, || {
+        let response = request_with_policy(RetryPolicy::Never, || {
             let url = url.clone();
             let api_key = api_key.clone();
             let payload = payload.clone();
@@ -99,19 +106,24 @@ impl SeedanceClient {
         let base_url = settings.base_url.trim_end_matches('/');
         let url = format!("{base_url}/contents/generations/tasks/{job_id}");
         let api_key = settings.api_key.clone();
-        let response = retry_transient(TRANSIENT_RETRY_ATTEMPTS, || {
-            let url = url.clone();
-            let api_key = api_key.clone();
-            async move {
-                let client = poll_http_client()?;
-                client
-                    .get(&url)
-                    .header("Authorization", format!("Bearer {api_key}"))
-                    .send()
-                    .await
-                    .map_err(|error| AppError::Provider(format_http_error(&url, &error)))
-            }
-        })
+        let response = request_with_policy(
+            RetryPolicy::Transient {
+                attempts: TRANSIENT_RETRY_ATTEMPTS,
+            },
+            || {
+                let url = url.clone();
+                let api_key = api_key.clone();
+                async move {
+                    let client = poll_http_client()?;
+                    client
+                        .get(&url)
+                        .header("Authorization", format!("Bearer {api_key}"))
+                        .send()
+                        .await
+                        .map_err(|error| AppError::Provider(format_http_error(&url, &error)))
+                }
+            },
+        )
         .await?;
         if !response.status().is_success() {
             let status = response.status();
@@ -242,8 +254,21 @@ where
         .unwrap_or_else(|| AppError::Provider("Seedance request failed after retries".into())))
 }
 
+async fn request_with_policy<T, F, Fut>(policy: RetryPolicy, mut operation: F) -> AppResult<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = AppResult<T>>,
+{
+    match policy {
+        RetryPolicy::Never => operation().await,
+        RetryPolicy::Transient { attempts } => retry_transient(attempts, operation).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
 
     #[test]
@@ -262,5 +287,33 @@ mod tests {
             "slow zoom in --rs 1080p --dur 5"
         );
         assert_eq!(segment_text(4.2, None, Some("720p")), "--rs 720p --dur 4");
+    }
+
+    #[tokio::test]
+    async fn non_idempotent_policy_never_retries_transient_errors() {
+        let attempts = AtomicUsize::new(0);
+
+        let result = request_with_policy(RetryPolicy::Never, || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async { Err::<(), _>(AppError::Provider("connection reset".into())) }
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn transient_policy_retries_idempotent_requests() {
+        let attempts = AtomicUsize::new(0);
+
+        let result = request_with_policy(RetryPolicy::Transient { attempts: 3 }, || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async { Err::<(), _>(AppError::Provider("connection reset".into())) }
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
     }
 }
