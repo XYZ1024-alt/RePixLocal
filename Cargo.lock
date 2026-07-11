@@ -3227,6 +3227,7 @@ dependencies = [
  "chrono",
  "directories",
  "fs2",
+ "futures-util",
  "keyring",
  "reqwest 0.12.28",
  "rfd",
