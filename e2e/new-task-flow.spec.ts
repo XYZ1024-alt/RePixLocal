@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 type E2eControls = {
+  dashboardMode: "auto" | "empty" | "running" | "completed";
   failListAssets: boolean;
   failListRuns: boolean;
   listRunsCalls: number;
@@ -38,24 +39,24 @@ test("shows run list load and refresh failures without unhandled rejections", as
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await installTauriMock(page);
   await page.goto("/");
-  await setMockFailures(page, { failListRuns: true });
+  await setMockControls(page, { failListRuns: true });
 
   await page.getByRole("button", { name: "Console", exact: true }).click();
   await expect(page.getByText("Unable to load pipeline runs.")).toBeVisible();
   await expect(page.getByText("Submit a task from the Wizard")).not.toBeVisible();
 
-  await setMockFailures(page, { failListRuns: false });
+  await setMockControls(page, { failListRuns: false });
   await page.getByRole("button", { name: "Retry", exact: true }).click();
   await expect(page.getByText("Submit a task from the Wizard")).toBeVisible();
 
-  await setMockFailures(page, { failListRuns: true });
+  await setMockControls(page, { failListRuns: true });
   const refreshWarning = page.getByRole("alert");
   await expect(refreshWarning).toContainText(
     "Refresh failed. Showing the last successful result: run list unavailable",
     { timeout: 7000 }
   );
   await expect(page.getByText("Submit a task from the Wizard")).toBeVisible();
-  await setMockFailures(page, {
+  await setMockControls(page, {
     failListRuns: false,
     listRunsDelayMs: MOCK_RETRY_DELAY_MS
   });
@@ -74,23 +75,71 @@ test("shows an asset library load failure and recovers on retry", async ({ page 
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await installTauriMock(page);
   await page.goto("/");
-  await setMockFailures(page, { failListAssets: true });
+  await setMockControls(page, { failListAssets: true });
 
   await page.getByRole("button", { name: "Asset Library", exact: true }).click();
   await expect(page.getByText("Unable to load assets.")).toBeVisible();
   await expect(page.getByText("No assets yet.")).not.toBeVisible();
 
-  await setMockFailures(page, { failListAssets: false });
+  await setMockControls(page, { failListAssets: false });
   await page.getByRole("button", { name: "Retry", exact: true }).click();
   await expect(page.getByText("No assets yet.")).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
-async function setMockFailures(page: Page, failures: Partial<E2eControls>) {
-  await page.evaluate((nextFailures) => {
+test("refreshes dashboard on navigation and run events", async ({ page }) => {
+  await installTauriMock(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Console", exact: true }).click();
+  await setMockControls(page, { dashboardMode: "running" });
+
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await expect(dashboardMetric(page, "Running")).toHaveText("1");
+  await expect(dashboardMetric(page, "Completed")).toHaveText("0");
+  await expect(page.getByRole("row").filter({ hasText: "Dashboard task" })).toContainText(
+    "RUNNING"
+  );
+
+  await setMockControls(page, { dashboardMode: "completed" });
+  await emitRunEvent(page, "COMPLETED");
+
+  await expect(dashboardMetric(page, "Running")).toHaveText("0");
+  await expect(dashboardMetric(page, "Completed")).toHaveText("1");
+  await expect(page.getByRole("row").filter({ hasText: "Dashboard task" })).toContainText(
+    "COMPLETED"
+  );
+});
+
+function dashboardMetric(page: Page, label: string) {
+  return page.getByText(label, { exact: true }).locator("..").locator("span").nth(1);
+}
+
+async function emitRunEvent(page: Page, status: string) {
+  await page.evaluate(async (nextStatus) => {
+    const internals = (
+      window as Window & {
+        __TAURI_INTERNALS__: {
+          invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    await internals.invoke("plugin:event|emit", {
+      event: "pipeline-event",
+      payload: {
+        event: "run",
+        run_id: "run-dashboard-1",
+        task_id: "task-dashboard-1",
+        status: nextStatus
+      }
+    });
+  }, status);
+}
+
+async function setMockControls(page: Page, updates: Partial<E2eControls>) {
+  await page.evaluate((nextControls) => {
     const controls = (window as Window & { __REPIX_E2E__: E2eControls }).__REPIX_E2E__;
-    Object.assign(controls, nextFailures);
-  }, failures);
+    Object.assign(controls, nextControls);
+  }, updates);
 }
 
 async function getMockControls(page: Page) {
@@ -129,6 +178,7 @@ async function installTauriMock(page: Page) {
     let nextCallbackId = 1;
     let createdTaskTitle = "";
     const controls: E2eControls = {
+      dashboardMode: "auto",
       failListAssets: false,
       failListRuns: false,
       listRunsCalls: 0,
@@ -136,6 +186,7 @@ async function installTauriMock(page: Page) {
     };
 
     const now = "2026-06-20T12:00:00.000Z";
+    const submittedRefreshDelayMs = 250;
     const taskId = "task-e2e-1";
     const runId = "run-e2e-1";
 
@@ -194,18 +245,36 @@ async function installTauriMock(page: Page) {
     }
 
     function dashboardData() {
-      const hasTask = createdTaskTitle.length > 0;
+      const mode =
+        controls.dashboardMode === "auto"
+          ? createdTaskTitle
+            ? "completed"
+            : "empty"
+          : controls.dashboardMode;
+      const hasTask = mode !== "empty";
+      const status = mode.toUpperCase();
+      const title = createdTaskTitle || "Dashboard task";
       return {
         stats: {
           total_tasks: hasTask ? 1 : 0,
-          running: 0,
-          completed: hasTask ? 1 : 0,
-          success_rate: hasTask ? 100 : 0,
-          assets_ready: hasTask ? 1 : 0
+          running: mode === "running" ? 1 : 0,
+          completed: mode === "completed" ? 1 : 0,
+          success_rate: mode === "completed" ? 100 : 0,
+          assets_ready: mode === "completed" ? 1 : 0
         },
-        status_count: hasTask ? { COMPLETED: 1 } : {},
+        status_count: hasTask ? { [status]: 1 } : {},
         trend: [],
-        queue: [],
+        queue: hasTask
+          ? [
+              {
+                id: "run-dashboard-1",
+                title,
+                status,
+                current_stage: mode === "completed" ? "FINAL_RENDER" : "SCRIPT_REWRITE",
+                progress: mode === "completed" ? 100 : 50
+              }
+            ]
+          : [],
         usage: []
       };
     }
@@ -263,9 +332,6 @@ async function installTauriMock(page: Page) {
             whisper_model_dir: "C:\\repix-e2e\\models\\whisper"
           };
         case "get_dashboard_data":
-          if (createdTaskTitle) {
-            await new Promise((resolve) => window.setTimeout(resolve, 250));
-          }
           return dashboardData();
         case "list_runs":
           controls.listRunsCalls += 1;
@@ -335,6 +401,9 @@ async function installTauriMock(page: Page) {
             path: "C:\\repix-e2e\\models\\whisper\\ggml-base.bin"
           };
         case "check_ffmpeg":
+          if (createdTaskTitle) {
+            await new Promise((resolve) => window.setTimeout(resolve, submittedRefreshDelayMs));
+          }
           return [
             { name: "ffmpeg", found: true, path: "bundled", bundled: true },
             { name: "ffprobe", found: true, path: "bundled", bundled: true },

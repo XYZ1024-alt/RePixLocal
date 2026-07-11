@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { checkFfmpeg, ensureWhisperModel, getDashboardData, getSettings } from "./api";
 import { Shell } from "./components/Shell";
@@ -9,7 +10,7 @@ import { ConsoleListView } from "./views/ConsoleListView";
 import { ConsoleDetailView } from "./views/ConsoleDetailView";
 import { AssetLibraryView } from "./views/AssetLibraryView";
 import { SettingsView } from "./views/SettingsView";
-import type { DashboardData, Settings, ToolCheck, ViewKey } from "./types";
+import type { DashboardData, PipelineEvent, Settings, ToolCheck, ViewKey } from "./types";
 
 export function App() {
   const [view, setView] = useState<ViewKey>("dashboard");
@@ -18,14 +19,23 @@ export function App() {
   const [settings, setSettings] = useState<Settings>({ workspace_root: "" });
   const [tools, setTools] = useState<ToolCheck[]>([]);
   const [message, setMessage] = useState("");
+  const latestDashboardRequest = useRef(0);
+
+  const refreshDashboard = useCallback(async () => {
+    const requestId = ++latestDashboardRequest.current;
+    try {
+      const nextDashboard = await getDashboardData();
+      if (requestId === latestDashboardRequest.current) {
+        setDashboardData(nextDashboard);
+      }
+    } catch (error) {
+      if (requestId === latestDashboardRequest.current) throw error;
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
-    const [nextSettings, nextDashboard] = await Promise.all([
-      getSettings(),
-      getDashboardData()
-    ]);
+    const nextSettings = await getSettings();
     setSettings(nextSettings);
-    setDashboardData(nextDashboard);
     try {
       await ensureWhisperModel(nextSettings.asr_model);
     } catch {
@@ -38,6 +48,41 @@ export function App() {
   useEffect(() => {
     refresh().catch((error) => setMessage(String(error)));
   }, [refresh]);
+
+  useEffect(() => {
+    if (view !== "dashboard") return;
+
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    const reportError = (error: unknown) => {
+      if (active) setMessage(String(error));
+    };
+    const loadDashboard = () => {
+      if (!active) return;
+      void refreshDashboard().catch(reportError);
+    };
+
+    void listen<PipelineEvent>("pipeline-event", (event) => {
+      if (event.payload.event === "run") loadDashboard();
+    })
+      .then((dispose) => {
+        if (!active) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+        loadDashboard();
+      })
+      .catch((error) => {
+        reportError(error);
+        loadDashboard();
+      });
+
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [refreshDashboard, view]);
 
   function navigate(viewKey: ViewKey) {
     setView(viewKey);
