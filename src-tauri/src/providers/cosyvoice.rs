@@ -43,7 +43,7 @@ impl CosyVoiceClient {
         } else {
             settings.model.clone()
         };
-        let voice = map_voice_id(voice_key);
+        let voice = map_voice_id(voice_key, &model);
         let mut input = json!({
             "text": trimmed,
             "voice": voice,
@@ -100,12 +100,23 @@ impl CosyVoiceClient {
     }
 }
 
-pub fn map_voice_id(voice_key: &str) -> &'static str {
-    // cosyvoice-v3-flash uses v3 system voices (see CosyVoice voice list).
-    match voice_key {
-        "male-1" => "longanyang",
-        "narrator" => "longsanshu_v3",
-        _ => "longwan_v3",
+pub fn map_voice_id(voice_key: &str, model: &str) -> &'static str {
+    let is_v3 = model.to_ascii_lowercase().contains("v3");
+    if is_v3 {
+        // Voices compatible with cosyvoice-v3-flash / cosyvoice-v3-plus.
+        // longxiaochun is the default voice used in the official DashScope SDK examples.
+        match voice_key {
+            "male-1" => "longshu_v3",
+            "narrator" => "loongbella_v3",
+            _ => "longxiaochun",
+        }
+    } else {
+        // Voices for cosyvoice-v1 and similar older models.
+        match voice_key {
+            "male-1" => "longanyang",
+            "narrator" => "longshu",
+            _ => "longwan",
+        }
     }
 }
 
@@ -136,9 +147,18 @@ mod tests {
 
     #[test]
     fn voice_mapping() {
-        assert_eq!(map_voice_id("female-1"), "longwan_v3");
-        assert_eq!(map_voice_id("male-1"), "longanyang");
-        assert_eq!(map_voice_id("narrator"), "longsanshu_v3");
+        assert_eq!(
+            map_voice_id("female-1", "cosyvoice-v3-flash"),
+            "longxiaochun"
+        );
+        assert_eq!(map_voice_id("male-1", "cosyvoice-v3-flash"), "longshu_v3");
+        assert_eq!(
+            map_voice_id("narrator", "cosyvoice-v3-flash"),
+            "loongbella_v3"
+        );
+        assert_eq!(map_voice_id("female-1", "cosyvoice-v1"), "longwan");
+        assert_eq!(map_voice_id("male-1", "cosyvoice-v1"), "longanyang");
+        assert_eq!(map_voice_id("narrator", "cosyvoice-v1"), "longshu");
     }
 
     #[test]
