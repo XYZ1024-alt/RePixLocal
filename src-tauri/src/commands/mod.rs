@@ -413,14 +413,23 @@ async fn whisper_model_status_internal(
     model_name: &str,
 ) -> Result<WhisperModelStatus, String> {
     let model_dir = state.config.read().await.whisper_model_dir.clone();
-    let mut status =
-        whisper_models::model_status(&state.workspace, model_dir.as_deref(), model_name);
+    let status = whisper_models::model_status(&state.workspace, model_dir.as_deref(), model_name);
     let download = whisper_models::get_download_state().await;
-    status.downloading = download.downloading && download.model_name == model_name;
+    Ok(merge_whisper_download_state(status, &download))
+}
+
+fn merge_whisper_download_state(
+    mut status: WhisperModelStatus,
+    download: &whisper_models::DownloadState,
+) -> WhisperModelStatus {
+    if status.model_name != download.model_name {
+        return status;
+    }
+    status.downloading = download.downloading;
     status.bytes_done = download.bytes_done;
     status.bytes_total = download.bytes_total;
-    status.error = download.error;
-    Ok(status)
+    status.error.clone_from(&download.error);
+    status
 }
 
 async fn resolve_whisper_cli_available(state: &AppState) -> bool {
@@ -651,5 +660,55 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("API key not configured"));
+    }
+
+    #[test]
+    fn whisper_status_merges_download_state_for_matching_model() {
+        let status = whisper_status("base");
+        let download = whisper_models::DownloadState {
+            downloading: true,
+            model_name: "base".into(),
+            bytes_done: 128,
+            bytes_total: Some(256),
+            error: Some("interrupted".into()),
+        };
+
+        let merged = merge_whisper_download_state(status, &download);
+
+        assert!(merged.downloading);
+        assert_eq!(merged.bytes_done, 128);
+        assert_eq!(merged.bytes_total, Some(256));
+        assert_eq!(merged.error.as_deref(), Some("interrupted"));
+    }
+
+    #[test]
+    fn whisper_status_ignores_download_state_for_other_model() {
+        let status = whisper_status("small");
+        let download = whisper_models::DownloadState {
+            downloading: true,
+            model_name: "base".into(),
+            bytes_done: 128,
+            bytes_total: Some(256),
+            error: Some("interrupted".into()),
+        };
+
+        let merged = merge_whisper_download_state(status, &download);
+
+        assert!(!merged.downloading);
+        assert_eq!(merged.bytes_done, 0);
+        assert_eq!(merged.bytes_total, None);
+        assert_eq!(merged.error, None);
+    }
+
+    fn whisper_status(model_name: &str) -> WhisperModelStatus {
+        WhisperModelStatus {
+            model_name: model_name.into(),
+            downloaded: false,
+            path: format!("{model_name}.bin"),
+            downloading: false,
+            bytes_done: 0,
+            bytes_total: None,
+            error: None,
+        }
     }
 }
