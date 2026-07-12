@@ -201,7 +201,11 @@ impl SeedanceClient {
     }
 }
 
-fn segment_text(duration_sec: f64, motion_prompt: Option<&str>, resolution: Option<&str>) -> String {
+fn segment_text(
+    duration_sec: f64,
+    motion_prompt: Option<&str>,
+    resolution: Option<&str>,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(prompt) = motion_prompt {
         if !prompt.trim().is_empty() {
