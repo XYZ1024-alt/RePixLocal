@@ -51,7 +51,7 @@ async function warmClient() {
       timeout: CLIENT_WARMUP_TIMEOUT_MS,
       waitUntil: "domcontentloaded"
     });
-    await page.locator('script[type="module"][src="/ui/src/main.tsx"]').waitFor({
+    await page.locator('script[type="module"][src^="/ui/src/main.tsx"]').waitFor({
       state: "attached",
       timeout: CLIENT_WARMUP_TIMEOUT_MS
     });
