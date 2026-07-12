@@ -1179,19 +1179,31 @@ async fn run_pending_migrations(pool: &SqlitePool) -> AppResult<()> {
             .await?;
     }
 
-    let scenes_extended: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM pragma_table_info('scenes') WHERE name = 'visual_prompt'",
+    ensure_column(
+        pool,
+        "scenes",
+        "visual_prompt",
+        "ALTER TABLE scenes ADD COLUMN visual_prompt TEXT",
     )
-    .fetch_one(pool)
     .await?;
-    if scenes_extended == 0 {
-        pool.execute(include_str!("migrations/0003_scenes_extend.sql"))
-            .await?;
-        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)")
-            .bind(Utc::now().to_rfc3339())
-            .execute(pool)
-            .await?;
-    }
+    ensure_column(
+        pool,
+        "scenes",
+        "motion_prompt",
+        "ALTER TABLE scenes ADD COLUMN motion_prompt TEXT",
+    )
+    .await?;
+    ensure_column(
+        pool,
+        "scenes",
+        "metadata_json",
+        "ALTER TABLE scenes ADD COLUMN metadata_json TEXT",
+    )
+    .await?;
+    sqlx::query("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, ?)")
+        .bind(Utc::now().to_rfc3339())
+        .execute(pool)
+        .await?;
 
     ensure_column(
         pool,
@@ -1931,6 +1943,60 @@ mod tests {
         assert_eq!(stale_run.id, run.id);
         let task = reopened.get_task(&task_id).await.unwrap().unwrap();
         assert!(matches!(task.status, TaskStatus::Failed));
+    }
+
+    #[tokio::test]
+    async fn scene_migration_recovers_from_partial_column_addition() {
+        let root = std::env::temp_dir().join(format!("repix-db-migration-test-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let workspace = Workspace::from_root(root);
+        let options = SqliteConnectOptions::new()
+            .filename(workspace.database_path())
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options).await.unwrap();
+        pool.execute(include_str!("migrations/0001_init.sql"))
+            .await
+            .unwrap();
+        pool.execute(include_str!("migrations/0002_api_usage.sql"))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?)")
+            .bind(Utc::now().to_rfc3339())
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.execute("ALTER TABLE scenes ADD COLUMN visual_prompt TEXT")
+            .await
+            .unwrap();
+        drop(pool);
+
+        let repo = Repository::initialize(&workspace).await.unwrap();
+        assert_scene_migration_complete(&repo.pool).await;
+        drop(repo);
+
+        let reopened = Repository::initialize(&workspace).await.unwrap();
+        assert_scene_migration_complete(&reopened.pool).await;
+    }
+
+    async fn assert_scene_migration_complete(pool: &SqlitePool) {
+        let columns: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM pragma_table_info('scenes') \
+             WHERE name IN ('visual_prompt', 'motion_prompt', 'metadata_json') ORDER BY name",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            columns,
+            vec!["metadata_json", "motion_prompt", "visual_prompt"]
+        );
+
+        let version_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM schema_migrations WHERE version = 3")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(version_count, 1);
     }
 
     async fn assert_run_and_task_terminal_state_matches(
