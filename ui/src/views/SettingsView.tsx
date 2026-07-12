@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   AudioLines,
@@ -62,6 +62,7 @@ const PROVIDER_LABELS: Record<Provider, string> = {
 };
 
 const DEFAULT_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/api/v1";
+const WHISPER_STATUS_POLL_INTERVAL_MS = 500;
 
 export function SettingsView(props: {
   settings: Settings;
@@ -924,6 +925,7 @@ function SystemSettingsForm(props: {
   const [mockProviders, setMockProviders] = useState(props.initialSettings.mock_providers ?? true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const modelStatusGeneration = useRef(0);
 
   useEffect(() => {
     setAsrModel(props.initialSettings.asr_model ?? "base");
@@ -935,16 +937,41 @@ function SystemSettingsForm(props: {
   }, [props.initialSettings]);
 
   useEffect(() => {
-    getWhisperModelStatus(asrModel)
-      .then(setModelStatus)
-      .catch(() => setModelStatus(null));
-  }, [asrModel, props.tools]);
+    const generation = ++modelStatusGeneration.current;
+    let timeoutId: number | undefined;
+    const isCurrent = () => generation === modelStatusGeneration.current;
+
+    async function pollModelStatus() {
+      if (!isCurrent()) return;
+      try {
+        const status = await getWhisperModelStatus(asrModel);
+        if (isCurrent()) setModelStatus(status);
+      } catch (error) {
+        if (isCurrent()) props.onMessage(String(error));
+      } finally {
+        if (isCurrent()) {
+          timeoutId = window.setTimeout(
+            () => void pollModelStatus(),
+            WHISPER_STATUS_POLL_INTERVAL_MS
+          );
+        }
+      }
+    }
+
+    setModelStatus(null);
+    void pollModelStatus();
+    return () => {
+      if (modelStatusGeneration.current === generation) {
+        modelStatusGeneration.current += 1;
+      }
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [asrModel, props.onMessage]);
 
   async function handleRecheck() {
     props.onEnsureWhisperModel(asrModel);
     try {
       await props.onRefresh();
-      setModelStatus(await getWhisperModelStatus(asrModel));
     } catch (error) {
       props.onMessage(String(error));
     }

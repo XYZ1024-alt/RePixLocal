@@ -1,5 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 
+type MockWhisperStatus = {
+  bytes_done?: number;
+  bytes_total?: number | null;
+  downloaded: boolean;
+  downloading: boolean;
+  error?: string | null;
+};
+
 type E2eControls = {
   dashboardMode: "auto" | "empty" | "running" | "completed";
   failListAssets: boolean;
@@ -15,6 +23,10 @@ type E2eControls = {
   whisperEnsureSuccesses: string[];
   whisperEvents: Array<"check" | "ensure-error" | "ensure-start" | "ensure-success">;
   whisperSettledCheckDelayMs: number;
+  whisperStatusByModel: Record<string, MockWhisperStatus>;
+  whisperStatusDelayMsByModel: Record<string, number>;
+  whisperStatusEvents: string[];
+  whisperStatusFailuresRemaining: number;
 };
 
 const MOCK_RETRY_DELAY_MS = 500;
@@ -209,8 +221,108 @@ test("keeps a queued Whisper model when the settled model is requested again", a
   expect((await getMockControls(page)).whisperEnsureCalls).toBe(2);
 });
 
+test("recovers Whisper status polling after a visible transient failure", async ({ page }) => {
+  await installTauriMock(page, {
+    whisperStatusByModel: {
+      base: { downloaded: false, downloading: true, bytes_done: 1, bytes_total: 2 }
+    }
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("tab", { name: "System Settings", exact: true }).click();
+  await expect(page.getByText("Downloading Whisper model", { exact: false })).toBeVisible();
+
+  await setMockControls(page, {
+    whisperStatusDelayMsByModel: { base: 700 },
+    whisperStatusEvents: [],
+    whisperStatusFailuresRemaining: 1
+  });
+  await expect(
+    page.getByText("whisper status temporarily unavailable", { exact: false })
+  ).toBeVisible();
+  await setMockControls(page, {
+    whisperStatusByModel: {
+      base: { downloaded: true, downloading: false }
+    }
+  });
+
+  await expect
+    .poll(async () => {
+      const events = (await getMockControls(page)).whisperStatusEvents;
+      return events.lastIndexOf("success:base") > events.indexOf("error:base");
+    })
+    .toBe(true);
+  await expect(page.getByText("Model ready: ggml-base.bin", { exact: true })).toBeVisible();
+
+  const events = (await getMockControls(page)).whisperStatusEvents;
+  expect(maxConcurrentStatusRequests(events, "base")).toBe(1);
+});
+
+test("ignores a slow Whisper status response for the previous model", async ({ page }) => {
+  await installTauriMock(page, {
+    whisperStatusByModel: {
+      base: { downloaded: true, downloading: false },
+      small: { downloaded: true, downloading: false }
+    },
+    whisperStatusDelayMsByModel: { base: 2_000 }
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("tab", { name: "System Settings", exact: true }).click();
+  await expect
+    .poll(async () => (await getMockControls(page)).whisperStatusEvents.includes("start:base"))
+    .toBe(true);
+
+  await page.getByRole("combobox", { name: "Whisper Model", exact: true }).click();
+  await page.getByRole("option", { name: "Small (balanced)", exact: true }).click();
+  await expect(page.getByText("Model ready: ggml-small.bin", { exact: true })).toBeVisible();
+  await setMockControls(page, {
+    whisperStatusDelayMsByModel: { base: 2_000, small: 5_000 }
+  });
+
+  await expect
+    .poll(async () => {
+      const events = (await getMockControls(page)).whisperStatusEvents;
+      const starts = events.filter((event) => event === "start:base").length;
+      const finishes = events.filter(
+        (event) => event === "success:base" || event === "error:base"
+      ).length;
+      return starts > 0 && starts === finishes;
+    })
+    .toBe(true);
+  await page.evaluate(
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  );
+  await expect(page.getByText("Model ready: ggml-small.bin", { exact: true })).toBeVisible();
+  await expect(page.getByText("Model ready: ggml-base.bin", { exact: true })).toHaveCount(0);
+
+  const baseStarts = (await getMockControls(page)).whisperStatusEvents.filter(
+    (event) => event === "start:base"
+  ).length;
+  await page.waitForTimeout(1_200);
+  expect(
+    (await getMockControls(page)).whisperStatusEvents.filter(
+      (event) => event === "start:base"
+    )
+  ).toHaveLength(baseStarts);
+});
+
 function dashboardMetric(page: Page, label: string) {
   return page.getByText(label, { exact: true }).locator("..").locator("span").nth(1);
+}
+
+function maxConcurrentStatusRequests(events: string[], model: string) {
+  let active = 0;
+  let maximum = 0;
+  for (const event of events) {
+    if (event === `start:${model}`) {
+      active += 1;
+      maximum = Math.max(maximum, active);
+    } else if (event === `success:${model}` || event === `error:${model}`) {
+      active = Math.max(0, active - 1);
+    }
+  }
+  return maximum;
 }
 
 async function emitRunEvent(page: Page, status: string) {
@@ -291,6 +403,10 @@ async function installTauriMock(page: Page, initialControls: Partial<E2eControls
       whisperEnsureSuccesses: [],
       whisperEvents: [],
       whisperSettledCheckDelayMs: 0,
+      whisperStatusByModel: {},
+      whisperStatusDelayMsByModel: {},
+      whisperStatusEvents: [],
+      whisperStatusFailuresRemaining: 0,
       ...initialControls
     };
 
@@ -546,12 +662,30 @@ async function installTauriMock(page: Page, initialControls: Partial<E2eControls
             controls.whisperActiveModel = null;
           }
         }
-        case "get_whisper_model_status":
+        case "get_whisper_model_status": {
+          const modelName = String(args?.model ?? "base");
+          controls.whisperStatusEvents.push(`start:${modelName}`);
+          const delayMs = controls.whisperStatusDelayMsByModel[modelName] ?? 0;
+          if (delayMs > 0) {
+            await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+          }
+          if (controls.whisperStatusFailuresRemaining > 0) {
+            controls.whisperStatusFailuresRemaining -= 1;
+            controls.whisperStatusEvents.push(`error:${modelName}`);
+            throw new Error("whisper status temporarily unavailable");
+          }
+          const status = controls.whisperStatusByModel[modelName];
+          controls.whisperStatusEvents.push(`success:${modelName}`);
           return {
-            model_name: String(args?.model ?? "base"),
-            downloaded: controls.whisperDownloaded,
-            path: "C:\\repix-e2e\\models\\whisper\\ggml-base.bin"
+            model_name: modelName,
+            downloaded: status?.downloaded ?? controls.whisperDownloaded,
+            path: `C:\\repix-e2e\\models\\whisper\\ggml-${modelName}.bin`,
+            downloading: status?.downloading ?? false,
+            bytes_done: status?.bytes_done ?? 0,
+            bytes_total: status?.bytes_total ?? null,
+            error: status?.error ?? null
           };
+        }
         case "check_ffmpeg":
           controls.whisperEvents.push("check");
           if (
