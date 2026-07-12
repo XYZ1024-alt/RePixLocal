@@ -6,7 +6,7 @@ use tracing::debug;
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
 use crate::providers::fetch::{download_to_file, DownloadKind};
-use crate::providers::http_client::{build_http_client, format_http_error};
+use crate::providers::http_client::{build_http_client_direct, format_http_error};
 
 const DEFAULT_MODEL: &str = "cosyvoice-v3-flash";
 const DEFAULT_SAMPLE_RATE: i32 = 24_000;
@@ -64,7 +64,7 @@ impl CosyVoiceClient {
             "CosyVoice TTS request"
         );
         let url = cosyvoice_synthesizer_url(&settings.base_url);
-        let client = build_http_client(120)?;
+        let client = build_http_client_direct(120)?;
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", settings.api_key))

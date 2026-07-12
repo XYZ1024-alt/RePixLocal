@@ -1,16 +1,28 @@
 use std::time::Duration;
 
-use reqwest::{Client, Url};
+use reqwest::{Client, ClientBuilder, Url};
 
 use crate::errors::{AppError, AppResult};
 
-/// HTTP client that always connects directly (no proxy).
+/// HTTP client that respects the system and environment proxy configuration.
 pub fn build_http_client(timeout_secs: u64) -> AppResult<Client> {
+    finish_client(client_builder(timeout_secs))
+}
+
+/// HTTP client for domestic providers that must bypass configured proxies.
+pub fn build_http_client_direct(timeout_secs: u64) -> AppResult<Client> {
+    finish_client(client_builder(timeout_secs).no_proxy())
+}
+
+fn client_builder(timeout_secs: u64) -> ClientBuilder {
     Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .connect_timeout(Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::limited(10))
-        .no_proxy()
+}
+
+fn finish_client(builder: ClientBuilder) -> AppResult<Client> {
+    builder
         .build()
         .map_err(|error| AppError::Provider(error.to_string()))
 }
@@ -79,8 +91,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_http_client_succeeds() {
+    fn build_http_clients_succeed() {
         build_http_client(5).expect("client should build");
+        build_http_client_direct(5).expect("direct client should build");
     }
 
     #[test]
