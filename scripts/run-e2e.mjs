@@ -3,6 +3,7 @@ import { once } from "node:events";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { chromium } from "@playwright/test";
 
 const HOST = "127.0.0.1";
 const PORT = 1420;
@@ -11,6 +12,7 @@ const SERVER_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 250;
 const REQUEST_TIMEOUT_MS = 1_000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+const CLIENT_WARMUP_TIMEOUT_MS = 60_000;
 
 const projectRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const viteEntry = path.join(projectRoot, "node_modules", "vite", "bin", "vite.js");
@@ -28,11 +30,42 @@ async function main() {
       server = startVite();
       await waitForServer(server);
     }
+    await warmClient();
     process.exitCode = await runPlaywright(process.argv.slice(2));
   } finally {
     if (server) {
       await stopProcess(server);
     }
+  }
+}
+
+async function warmClient() {
+  const browser = await chromium.launch({ channel: "chrome" });
+  try {
+    const page = await browser.newPage();
+    await page.route(
+      /https:\/\/fonts\.(?:googleapis|gstatic)\.com\//,
+      (route) => route.abort()
+    );
+    await page.goto(BASE_URL, {
+      timeout: CLIENT_WARMUP_TIMEOUT_MS,
+      waitUntil: "domcontentloaded"
+    });
+    await page.locator('script[type="module"][src="/ui/src/main.tsx"]').waitFor({
+      state: "attached",
+      timeout: CLIENT_WARMUP_TIMEOUT_MS
+    });
+    await page.locator("main").waitFor({
+      state: "visible",
+      timeout: CLIENT_WARMUP_TIMEOUT_MS
+    });
+    await page.getByText("RePix", { exact: true }).first().waitFor({
+      state: "visible",
+      timeout: CLIENT_WARMUP_TIMEOUT_MS
+    });
+    console.log("[vite] client module graph warmed");
+  } finally {
+    await browser.close();
   }
 }
 
