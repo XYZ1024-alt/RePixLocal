@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
 use serde::Deserialize;
@@ -10,7 +11,7 @@ use crate::models::{
     DeepSeekBalance, DeepSeekBalanceInfo, ProviderListingCredentials, ProviderSettings,
     RewrittenScene, TranscriptSegment,
 };
-use crate::providers::http_client::{build_http_client, format_http_error};
+use crate::providers::http_client::{build_http_client, format_http_error, retry_connect_once};
 use crate::providers::json_util::parse_json_payload;
 
 const SYSTEM_PROMPT_WITH_VISUALS: &str = r#"You are a video director creating a replicated video that maintains visual similarity to the source.
@@ -72,6 +73,8 @@ Rules:
 - Keep wording concise enough for subtitles.
 - Output language: {target_language}.
 - If output language is Simplified Chinese, use Simplified Chinese only; do not output Traditional Chinese."#;
+
+const CHAT_CONNECT_RETRY_DELAY_MS: u64 = 500;
 
 #[derive(Debug, Clone)]
 pub struct DeepSeekClient {
@@ -268,12 +271,15 @@ impl DeepSeekClient {
         let base_url = normalize_openai_base_url(&settings.base_url);
         let client = build_http_client(120)?;
         let url = format!("{base_url}/chat/completions");
-        let response = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", settings.api_key))
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
+        let response =
+            retry_connect_once(Duration::from_millis(CHAT_CONNECT_RETRY_DELAY_MS), || {
+                client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", settings.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&payload)
+                    .send()
+            })
             .await
             .map_err(|error| AppError::Provider(format_http_error(&url, error)))?;
         if !response.status().is_success() {
