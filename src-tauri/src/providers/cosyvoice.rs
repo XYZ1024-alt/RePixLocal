@@ -5,7 +5,7 @@ use tracing::debug;
 
 use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
-use crate::providers::fetch::download_to_file;
+use crate::providers::fetch::{download_to_file, DownloadKind};
 use crate::providers::http_client::{build_http_client, format_http_error};
 
 const DEFAULT_MODEL: &str = "cosyvoice-v3-flash";
@@ -93,7 +93,7 @@ impl CosyVoiceClient {
         if let Some(parent) = out_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        download_to_file(audio_url, out_path).await?;
+        download_to_file(audio_url, out_path, DownloadKind::WavAudio).await?;
         Ok(CosyVoiceOutput {
             characters: text_character_count(trimmed),
         })

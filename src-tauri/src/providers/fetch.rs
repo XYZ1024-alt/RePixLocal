@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
-use reqwest::header::LOCATION;
+use reqwest::header::{HeaderMap, CONTENT_TYPE, LOCATION};
 use reqwest::{Client, Response, StatusCode, Url};
 use tokio::io::AsyncWriteExt;
 
@@ -15,6 +15,15 @@ use crate::providers::http_client::format_http_error;
 const CONNECT_TIMEOUT_SECS: u64 = 15;
 const DOWNLOAD_TIMEOUT_SECS: u64 = 300;
 const MAX_REDIRECTS: usize = 10;
+const MEBIBYTE: u64 = 1024 * 1024;
+const PNG_MAX_BYTES: u64 = 20 * MEBIBYTE;
+const WAV_MAX_BYTES: u64 = 100 * MEBIBYTE;
+const MP4_MAX_BYTES: u64 = 500 * MEBIBYTE;
+const ERROR_BODY_MAX_BYTES: usize = 8 * 1024;
+
+const PNG_CONTENT_TYPES: &[&str] = &["image/png"];
+const WAV_CONTENT_TYPES: &[&str] = &["audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"];
+const MP4_CONTENT_TYPES: &[&str] = &["video/mp4"];
 
 const BLOCKED_IPV4_RANGES: &[(Ipv4Addr, u8)] = &[
     (Ipv4Addr::new(0, 0, 0, 0), 8),
@@ -59,7 +68,43 @@ impl Resolve for PinnedResolver {
     }
 }
 
-pub async fn download_to_file(url: &str, dest: &Path) -> AppResult<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadKind {
+    PngImage,
+    WavAudio,
+    Mp4Video,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DownloadPolicy {
+    label: &'static str,
+    max_bytes: u64,
+    content_types: &'static [&'static str],
+}
+
+impl DownloadKind {
+    fn policy(self) -> DownloadPolicy {
+        match self {
+            Self::PngImage => DownloadPolicy {
+                label: "PNG image",
+                max_bytes: PNG_MAX_BYTES,
+                content_types: PNG_CONTENT_TYPES,
+            },
+            Self::WavAudio => DownloadPolicy {
+                label: "WAV audio",
+                max_bytes: WAV_MAX_BYTES,
+                content_types: WAV_CONTENT_TYPES,
+            },
+            Self::Mp4Video => DownloadPolicy {
+                label: "MP4 video",
+                max_bytes: MP4_MAX_BYTES,
+                content_types: MP4_CONTENT_TYPES,
+            },
+        }
+    }
+}
+
+pub async fn download_to_file(url: &str, dest: &Path, kind: DownloadKind) -> AppResult<()> {
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -72,12 +117,39 @@ pub async fn download_to_file(url: &str, dest: &Path) -> AppResult<()> {
     let response = send_safe_get(parse_download_url(url)?).await?;
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = read_error_body(response).await?;
         return Err(AppError::Provider(format!(
             "download failed ({status}): {body}"
         )));
     }
-    persist_response(response, dest).await
+    let policy = kind.policy();
+    validate_content_type(response.headers(), policy)?;
+    persist_response(response, dest, policy).await
+}
+
+async fn read_error_body(mut response: Response) -> AppResult<String> {
+    let mut body = Vec::with_capacity(ERROR_BODY_MAX_BYTES);
+    let mut truncated = false;
+    while body.len() < ERROR_BODY_MAX_BYTES {
+        let Some(chunk) = response.chunk().await.map_err(|error| {
+            AppError::Provider(format!("failed to read download error: {error}"))
+        })?
+        else {
+            break;
+        };
+        let remaining = ERROR_BODY_MAX_BYTES - body.len();
+        let copied = remaining.min(chunk.len());
+        body.extend_from_slice(&chunk[..copied]);
+        if copied < chunk.len() || body.len() == ERROR_BODY_MAX_BYTES {
+            truncated = true;
+            break;
+        }
+    }
+    let mut text = String::from_utf8_lossy(&body).into_owned();
+    if truncated {
+        text.push_str(" [truncated]");
+    }
+    Ok(text)
 }
 
 async fn send_safe_get(mut url: Url) -> AppResult<Response> {
@@ -244,6 +316,40 @@ fn is_followed_redirect(status: StatusCode) -> bool {
     )
 }
 
+fn validate_content_type(headers: &HeaderMap, policy: DownloadPolicy) -> AppResult<()> {
+    let mut values = headers.get_all(CONTENT_TYPE).iter();
+    let value = values.next().ok_or_else(|| {
+        AppError::Provider(format!(
+            "downloaded {} response has no Content-Type",
+            policy.label
+        ))
+    })?;
+    if values.next().is_some() {
+        return Err(AppError::Provider(format!(
+            "downloaded {} response has multiple Content-Type headers",
+            policy.label
+        )));
+    }
+    let raw = value.to_str().map_err(|error| {
+        AppError::Provider(format!(
+            "downloaded {} response has invalid Content-Type: {error}",
+            policy.label
+        ))
+    })?;
+    let media_type = raw.split(';').next().unwrap_or_default().trim();
+    if !policy
+        .content_types
+        .iter()
+        .any(|expected| media_type.eq_ignore_ascii_case(expected))
+    {
+        return Err(AppError::Provider(format!(
+            "downloaded {} response has unsupported Content-Type {media_type:?}",
+            policy.label
+        )));
+    }
+    Ok(())
+}
+
 fn is_public_ip(ip: IpAddr) -> bool {
     match normalize_ip(ip) {
         IpAddr::V4(ip) => !BLOCKED_IPV4_RANGES
@@ -278,10 +384,15 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
     is_global_unicast && !is_ietf_special && !is_documentation && !is_six_to_four
 }
 
-async fn persist_response(response: Response, dest: &Path) -> AppResult<()> {
+async fn persist_response(
+    response: Response,
+    dest: &Path,
+    policy: DownloadPolicy,
+) -> AppResult<()> {
     let expected_bytes = response.content_length();
+    validate_declared_size(expected_bytes, policy)?;
     let temp_path = download_temp_path(dest)?;
-    let result = write_response(response, &temp_path, expected_bytes).await;
+    let result = write_response(response, &temp_path, expected_bytes, policy).await;
     let result = match result {
         Ok(()) => tokio::fs::rename(&temp_path, dest).await.map_err(|error| {
             AppError::Provider(format!("failed to finalize download file: {error}"))
@@ -289,16 +400,26 @@ async fn persist_response(response: Response, dest: &Path) -> AppResult<()> {
         Err(error) => Err(error),
     };
 
-    if result.is_err() {
-        let _ = tokio::fs::remove_file(&temp_path).await;
+    if let Err(error) = result {
+        return match tokio::fs::remove_file(&temp_path).await {
+            Ok(()) => Err(error),
+            Err(cleanup_error) if cleanup_error.kind() == std::io::ErrorKind::NotFound => {
+                Err(error)
+            }
+            Err(cleanup_error) => Err(AppError::Provider(format!(
+                "{error}; failed to remove temporary download {}: {cleanup_error}",
+                temp_path.display()
+            ))),
+        };
     }
-    result
+    Ok(())
 }
 
 async fn write_response(
     mut response: reqwest::Response,
     temp_path: &Path,
     expected_bytes: Option<u64>,
+    policy: DownloadPolicy,
 ) -> AppResult<()> {
     let mut file = tokio::fs::File::create(temp_path)
         .await
@@ -309,10 +430,18 @@ async fn write_response(
         .await
         .map_err(|error| AppError::Provider(error.to_string()))?
     {
+        let chunk_bytes = u64::try_from(chunk.len())
+            .map_err(|_| AppError::Provider("download chunk size overflow".into()))?;
+        let next_size = downloaded_bytes.checked_add(chunk_bytes).ok_or_else(|| {
+            AppError::Provider(format!("downloaded {} size overflow", policy.label))
+        })?;
+        if next_size > policy.max_bytes {
+            return Err(download_too_large_error(policy));
+        }
         file.write_all(&chunk).await.map_err(|error| {
             AppError::Provider(format!("failed to write download chunk: {error}"))
         })?;
-        downloaded_bytes += chunk.len() as u64;
+        downloaded_bytes = next_size;
     }
     validate_download_size(downloaded_bytes, expected_bytes)?;
     file.flush()
@@ -321,6 +450,20 @@ async fn write_response(
     file.sync_all()
         .await
         .map_err(|error| AppError::Provider(format!("failed to sync download file: {error}")))
+}
+
+fn validate_declared_size(expected_bytes: Option<u64>, policy: DownloadPolicy) -> AppResult<()> {
+    if expected_bytes.is_some_and(|size| size > policy.max_bytes) {
+        return Err(download_too_large_error(policy));
+    }
+    Ok(())
+}
+
+fn download_too_large_error(policy: DownloadPolicy) -> AppError {
+    AppError::Provider(format!(
+        "downloaded {} exceeds the {} byte limit",
+        policy.label, policy.max_bytes
+    ))
 }
 
 fn download_temp_path(dest: &Path) -> AppResult<std::path::PathBuf> {
@@ -363,7 +506,7 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let dest = dir.join("asset.bin");
 
-        persist_response(local_response(&url).await, &dest)
+        persist_response(local_response(&url).await, &dest, test_policy(4))
             .await
             .unwrap();
 
@@ -379,7 +522,7 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let dest = dir.join("asset.bin");
 
-        let error = persist_response(local_response(&url).await, &dest)
+        let error = persist_response(local_response(&url).await, &dest, test_policy(100))
             .await
             .unwrap_err();
 
@@ -387,6 +530,92 @@ mod tests {
         assert!(!dest.exists());
         assert!(download_temp_files(&dir).is_empty());
         let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[test]
+    fn validates_media_content_types_and_wav_aliases() {
+        let accepted = [
+            (DownloadKind::PngImage, "image/png"),
+            (DownloadKind::PngImage, "IMAGE/PNG; charset=binary"),
+            (DownloadKind::WavAudio, "audio/wav"),
+            (DownloadKind::WavAudio, "audio/x-wav"),
+            (DownloadKind::WavAudio, "audio/wave"),
+            (DownloadKind::WavAudio, "audio/vnd.wave"),
+            (DownloadKind::Mp4Video, "video/mp4; profile=main"),
+        ];
+        for (kind, content_type) in accepted {
+            let mut headers = HeaderMap::new();
+            headers.insert(CONTENT_TYPE, content_type.parse().unwrap());
+            assert!(
+                validate_content_type(&headers, kind.policy()).is_ok(),
+                "Content-Type should be accepted: {content_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_missing_ambiguous_and_unexpected_content_types() {
+        assert!(validate_content_type(&HeaderMap::new(), DownloadKind::PngImage.policy()).is_err());
+
+        let mut wrong = HeaderMap::new();
+        wrong.insert(CONTENT_TYPE, "application/octet-stream".parse().unwrap());
+        assert!(validate_content_type(&wrong, DownloadKind::PngImage.policy()).is_err());
+
+        let mut duplicate = HeaderMap::new();
+        duplicate.append(CONTENT_TYPE, "image/png".parse().unwrap());
+        duplicate.append(CONTENT_TYPE, "video/mp4".parse().unwrap());
+        assert!(validate_content_type(&duplicate, DownloadKind::PngImage.policy()).is_err());
+    }
+
+    #[tokio::test]
+    async fn declared_oversize_download_leaves_no_files() {
+        let url = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndata");
+        let dir = test_dir();
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let dest = dir.join("asset.bin");
+
+        let error = persist_response(local_response(&url).await, &dest, test_policy(3))
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("exceeds"));
+        assert!(!dest.exists());
+        assert!(download_temp_files(&dir).is_empty());
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn chunked_oversize_download_leaves_no_files() {
+        let url = serve_once(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\ndata\r\n0\r\n\r\n",
+        );
+        let dir = test_dir();
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let dest = dir.join("asset.bin");
+
+        let error = persist_response(local_response(&url).await, &dest, test_policy(3))
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("exceeds"));
+        assert!(!dest.exists());
+        assert!(download_temp_files(&dir).is_empty());
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[tokio::test]
+    async fn error_response_body_is_bounded() {
+        let body = "x".repeat(ERROR_BODY_MAX_BYTES + 512);
+        let response = format!(
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let url = serve_once(response.as_bytes());
+
+        let excerpt = read_error_body(local_response(&url).await).await.unwrap();
+
+        assert_eq!(excerpt.len(), ERROR_BODY_MAX_BYTES + " [truncated]".len());
+        assert!(excerpt.ends_with(" [truncated]"));
     }
 
     #[test]
@@ -499,16 +728,25 @@ mod tests {
             .unwrap()
     }
 
-    fn serve_once(response: &'static [u8]) -> String {
+    fn serve_once(response: &[u8]) -> String {
+        let response = response.to_vec();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut request = [0u8; 1024];
             let _ = stream.read(&mut request);
-            stream.write_all(response).unwrap();
+            stream.write_all(&response).unwrap();
         });
         format!("http://{address}/asset")
+    }
+
+    fn test_policy(max_bytes: u64) -> DownloadPolicy {
+        DownloadPolicy {
+            label: "test asset",
+            max_bytes,
+            content_types: &["application/octet-stream"],
+        }
     }
 
     fn test_dir() -> std::path::PathBuf {

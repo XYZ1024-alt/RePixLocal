@@ -20,7 +20,7 @@ use crate::media::whisper::WhisperRunner;
 use crate::models::{AssetType, Scene, StageType, Task, WorkflowTaskType};
 use crate::providers::cosyvoice::CosyVoiceClient;
 use crate::providers::deepseek::{DeepSeekClient, DeepSeekUsage};
-use crate::providers::fetch::download_to_file;
+use crate::providers::fetch::{download_to_file, DownloadKind};
 use crate::providers::http_client::is_transient_provider_error;
 use crate::providers::qwen_vl::QwenVlClient;
 use crate::providers::seedance::{SeedanceClient, SegmentPollStatus};
@@ -566,7 +566,7 @@ impl PipelineRunner {
             let output = tongyi
                 .generate_frame_img2img(&keyframe_path, &prompt, index, strength, aspect_ratio)
                 .await?;
-            download_to_file(&output.source_url, &frame_path).await?;
+            download_to_file(&output.source_url, &frame_path, DownloadKind::PngImage).await?;
             let frame = asset_for_path(
                 task_id,
                 run_id,
@@ -929,7 +929,7 @@ impl PipelineRunner {
             let video_url = self
                 .poll_segment_with_cancel(task_id, run_id, app, &seedance, &job_id, scene)
                 .await?;
-            download_to_file(&video_url, &segment_path).await?;
+            download_to_file(&video_url, &segment_path, DownloadKind::Mp4Video).await?;
             if self.ffmpeg.is_video_black(&segment_path).await? {
                 let _ = tokio::fs::remove_file(&segment_path).await;
                 let mut metadata = scene.metadata_json.clone().unwrap_or_else(|| json!({}));
