@@ -1,9 +1,63 @@
+use std::error::Error;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
+use reqwest::header::LOCATION;
+use reqwest::{Client, Response, StatusCode, Url};
 use tokio::io::AsyncWriteExt;
 
 use crate::errors::{AppError, AppResult};
-use crate::providers::http_client::{build_http_client, format_http_error};
+use crate::providers::http_client::format_http_error;
+
+const CONNECT_TIMEOUT_SECS: u64 = 15;
+const DOWNLOAD_TIMEOUT_SECS: u64 = 300;
+const MAX_REDIRECTS: usize = 10;
+
+const BLOCKED_IPV4_RANGES: &[(Ipv4Addr, u8)] = &[
+    (Ipv4Addr::new(0, 0, 0, 0), 8),
+    (Ipv4Addr::new(10, 0, 0, 0), 8),
+    (Ipv4Addr::new(100, 64, 0, 0), 10),
+    (Ipv4Addr::new(127, 0, 0, 0), 8),
+    (Ipv4Addr::new(169, 254, 0, 0), 16),
+    (Ipv4Addr::new(172, 16, 0, 0), 12),
+    (Ipv4Addr::new(192, 0, 0, 0), 24),
+    (Ipv4Addr::new(192, 0, 2, 0), 24),
+    (Ipv4Addr::new(192, 88, 99, 0), 24),
+    (Ipv4Addr::new(192, 168, 0, 0), 16),
+    (Ipv4Addr::new(198, 18, 0, 0), 15),
+    (Ipv4Addr::new(198, 51, 100, 0), 24),
+    (Ipv4Addr::new(203, 0, 113, 0), 24),
+    (Ipv4Addr::new(224, 0, 0, 0), 4),
+    (Ipv4Addr::new(240, 0, 0, 0), 4),
+];
+
+struct ResolvedTarget {
+    host: String,
+    addresses: Vec<SocketAddr>,
+}
+
+struct PinnedResolver {
+    host: String,
+    addresses: Vec<SocketAddr>,
+}
+
+impl Resolve for PinnedResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let result: Result<Addrs, Box<dyn Error + Send + Sync>> =
+            if dns_names_match(name.as_str(), &self.host) {
+                Ok(Box::new(self.addresses.clone().into_iter()))
+            } else {
+                Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("refused DNS resolution for unverified host {name:?}"),
+                )))
+            };
+        Box::pin(std::future::ready(result))
+    }
+}
 
 pub async fn download_to_file(url: &str, dest: &Path) -> AppResult<()> {
     if let Some(parent) = dest.parent() {
@@ -15,12 +69,7 @@ pub async fn download_to_file(url: &str, dest: &Path) -> AppResult<()> {
             dest.display()
         )));
     }
-    let client = build_http_client(300)?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|error| AppError::Provider(format_http_error(url, &error)))?;
+    let response = send_safe_get(parse_download_url(url)?).await?;
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
@@ -28,6 +77,208 @@ pub async fn download_to_file(url: &str, dest: &Path) -> AppResult<()> {
             "download failed ({status}): {body}"
         )));
     }
+    persist_response(response, dest).await
+}
+
+async fn send_safe_get(mut url: Url) -> AppResult<Response> {
+    for redirect_count in 0..=MAX_REDIRECTS {
+        let response = request_url(&url).await?;
+        if !is_followed_redirect(response.status()) {
+            return Ok(response);
+        }
+        if redirect_count == MAX_REDIRECTS {
+            return Err(AppError::Provider(format!(
+                "download exceeded {MAX_REDIRECTS} redirects"
+            )));
+        }
+        url = redirect_url(&url, &response)?;
+    }
+    unreachable!("redirect loop always returns or errors")
+}
+
+async fn request_url(url: &Url) -> AppResult<Response> {
+    let target = resolve_public_target(url).await?;
+    let client = build_pinned_client(&target)?;
+    let response = client
+        .get(url.clone())
+        .send()
+        .await
+        .map_err(|error| AppError::Provider(format_http_error(url.as_str(), &error)))?;
+    validate_remote_address(&response, &target)?;
+    Ok(response)
+}
+
+fn parse_download_url(raw: &str) -> AppResult<Url> {
+    let url = Url::parse(raw)
+        .map_err(|error| AppError::Provider(format!("invalid download URL: {error}")))?;
+    validate_download_url(&url)?;
+    Ok(url)
+}
+
+fn validate_download_url(url: &Url) -> AppResult<()> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(AppError::Provider(
+            "download URL must use http or https".into(),
+        ));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(AppError::Provider(
+            "download URL must not contain user credentials".into(),
+        ));
+    }
+    if url.host_str().is_none() || url.port_or_known_default().is_none() {
+        return Err(AppError::Provider(
+            "download URL must contain a valid host and port".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn resolve_public_target(url: &Url) -> AppResult<ResolvedTarget> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| AppError::Provider("download URL has no host".into()))?
+        .to_string();
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| AppError::Provider("download URL has no valid port".into()))?;
+    let ip_host = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(&host);
+    let addresses = match ip_host.parse::<IpAddr>() {
+        Ok(ip) => vec![SocketAddr::new(ip, port)],
+        Err(_) => tokio::time::timeout(
+            Duration::from_secs(CONNECT_TIMEOUT_SECS),
+            tokio::net::lookup_host((host.as_str(), port)),
+        )
+        .await
+        .map_err(|_| AppError::Provider(format!("timed out resolving download host {host}")))?
+        .map_err(|error| {
+            AppError::Provider(format!("failed to resolve download host {host}: {error}"))
+        })?
+        .collect(),
+    };
+    validate_resolved_addresses(&host, &addresses)?;
+    Ok(ResolvedTarget { host, addresses })
+}
+
+fn validate_resolved_addresses(host: &str, addresses: &[SocketAddr]) -> AppResult<()> {
+    if addresses.is_empty() {
+        return Err(AppError::Provider(format!(
+            "download host {host} resolved to no addresses"
+        )));
+    }
+    if let Some(address) = addresses.iter().find(|address| !is_public_ip(address.ip())) {
+        return Err(AppError::Provider(format!(
+            "download host {host} resolved to non-public address {}",
+            address.ip()
+        )));
+    }
+    Ok(())
+}
+
+fn build_pinned_client(target: &ResolvedTarget) -> AppResult<Client> {
+    let resolver = PinnedResolver {
+        host: target.host.clone(),
+        addresses: target.addresses.clone(),
+    };
+    Client::builder()
+        .timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .dns_resolver(Arc::new(resolver))
+        .build()
+        .map_err(|error| AppError::Provider(error.to_string()))
+}
+
+fn dns_names_match(left: &str, right: &str) -> bool {
+    left.trim_end_matches('.')
+        .eq_ignore_ascii_case(right.trim_end_matches('.'))
+}
+
+fn validate_remote_address(response: &Response, target: &ResolvedTarget) -> AppResult<()> {
+    let remote = response
+        .remote_addr()
+        .ok_or_else(|| AppError::Provider("download response has no remote address".into()))?;
+    let remote_ip = normalize_ip(remote.ip());
+    let matches_resolved = target
+        .addresses
+        .iter()
+        .any(|address| normalize_ip(address.ip()) == remote_ip);
+    if !is_public_ip(remote_ip) || !matches_resolved {
+        return Err(AppError::Provider(format!(
+            "download connected to unverified remote address {remote_ip}"
+        )));
+    }
+    Ok(())
+}
+
+fn redirect_url(current: &Url, response: &Response) -> AppResult<Url> {
+    let location = response
+        .headers()
+        .get(LOCATION)
+        .ok_or_else(|| AppError::Provider("download redirect has no Location header".into()))?
+        .to_str()
+        .map_err(|error| AppError::Provider(format!("invalid redirect Location: {error}")))?;
+    join_redirect_url(current, location)
+}
+
+fn join_redirect_url(current: &Url, location: &str) -> AppResult<Url> {
+    let url = current
+        .join(location)
+        .map_err(|error| AppError::Provider(format!("invalid download redirect: {error}")))?;
+    validate_download_url(&url)?;
+    Ok(url)
+}
+
+fn is_followed_redirect(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::MOVED_PERMANENTLY
+            | StatusCode::FOUND
+            | StatusCode::SEE_OTHER
+            | StatusCode::TEMPORARY_REDIRECT
+            | StatusCode::PERMANENT_REDIRECT
+    )
+}
+
+fn is_public_ip(ip: IpAddr) -> bool {
+    match normalize_ip(ip) {
+        IpAddr::V4(ip) => !BLOCKED_IPV4_RANGES
+            .iter()
+            .any(|(network, prefix)| ipv4_in_prefix(ip, *network, *prefix)),
+        IpAddr::V6(ip) => is_public_ipv6(ip),
+    }
+}
+
+fn normalize_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(ip) => ip
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(ip)),
+        ip => ip,
+    }
+}
+
+fn ipv4_in_prefix(ip: Ipv4Addr, network: Ipv4Addr, prefix: u8) -> bool {
+    let mask = u32::MAX << (32 - u32::from(prefix));
+    u32::from(ip) & mask == u32::from(network) & mask
+}
+
+fn is_public_ipv6(ip: Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    let is_global_unicast = segments[0] & 0xe000 == 0x2000;
+    let is_ietf_special = segments[0] == 0x2001 && segments[1] < 0x0200;
+    let is_documentation = (segments[0] == 0x2001 && segments[1] == 0x0db8)
+        || (segments[0] == 0x3fff && segments[1] < 0x1000);
+    let is_six_to_four = segments[0] == 0x2002;
+    is_global_unicast && !is_ietf_special && !is_documentation && !is_six_to_four
+}
+
+async fn persist_response(response: Response, dest: &Path) -> AppResult<()> {
     let expected_bytes = response.content_length();
     let temp_path = download_temp_path(dest)?;
     let result = write_response(response, &temp_path, expected_bytes).await;
@@ -112,7 +363,9 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let dest = dir.join("asset.bin");
 
-        download_to_file(&url, &dest).await.unwrap();
+        persist_response(local_response(&url).await, &dest)
+            .await
+            .unwrap();
 
         assert_eq!(tokio::fs::read(&dest).await.unwrap(), b"data");
         assert!(download_temp_files(&dir).is_empty());
@@ -126,12 +379,124 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let dest = dir.join("asset.bin");
 
-        let error = download_to_file(&url, &dest).await.unwrap_err();
+        let error = persist_response(local_response(&url).await, &dest)
+            .await
+            .unwrap_err();
 
         assert!(error.to_string().contains("body") || error.to_string().contains("size"));
         assert!(!dest.exists());
         assert!(download_temp_files(&dir).is_empty());
         let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    #[test]
+    fn rejects_invalid_download_url_structures() {
+        for url in [
+            "file:///tmp/asset",
+            "ftp://example.com/asset",
+            "https://user:pass@example.com/asset",
+            "https://",
+        ] {
+            assert!(
+                parse_download_url(url).is_err(),
+                "URL should be rejected: {url}"
+            );
+        }
+        assert!(parse_download_url("https://example.com/asset").is_ok());
+    }
+
+    #[test]
+    fn accepts_only_public_unicast_addresses() {
+        let blocked = [
+            "0.0.0.0",
+            "10.0.0.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "169.254.169.254",
+            "172.16.0.1",
+            "192.168.0.1",
+            "192.0.2.1",
+            "198.18.0.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "::",
+            "::1",
+            "::ffff:127.0.0.1",
+            "fc00::1",
+            "fe80::1",
+            "ff00::1",
+            "2001:db8::1",
+            "2002:7f00:1::1",
+            "3fff::1",
+        ];
+        for raw in blocked {
+            let ip = raw.parse().unwrap();
+            assert!(!is_public_ip(ip), "address should be blocked: {raw}");
+        }
+        for raw in ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111"] {
+            let ip = raw.parse().unwrap();
+            assert!(is_public_ip(ip), "address should be public: {raw}");
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_loopback_literals_and_localhost_dns() {
+        for raw in ["http://127.0.0.1/asset", "http://[::1]/asset"] {
+            let url = parse_download_url(raw).unwrap();
+            assert!(resolve_public_target(&url).await.is_err());
+        }
+        let localhost = parse_download_url("http://localhost/asset").unwrap();
+        assert!(resolve_public_target(&localhost).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn accepts_public_ipv6_literals_without_dns_lookup() {
+        let url = parse_download_url("https://[2606:4700:4700::1111]/asset").unwrap();
+        let target = resolve_public_target(&url).await.unwrap();
+
+        assert_eq!(
+            target.addresses,
+            vec!["[2606:4700:4700::1111]:443".parse().unwrap()]
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_redirect_targets_that_resolve_to_loopback() {
+        let current = parse_download_url("https://example.com/path/asset").unwrap();
+        let relative = join_redirect_url(&current, "../next").unwrap();
+        assert_eq!(relative.as_str(), "https://example.com/next");
+
+        let private = join_redirect_url(&current, "http://127.0.0.1/admin").unwrap();
+        assert!(resolve_public_target(&private).await.is_err());
+        assert!(join_redirect_url(&current, "ftp://example.com/asset").is_err());
+        assert!(join_redirect_url(&current, "https://user:pass@example.com/asset").is_err());
+    }
+
+    #[tokio::test]
+    async fn pinned_resolver_rejects_unverified_hosts() {
+        let resolver = PinnedResolver {
+            host: "example.com".into(),
+            addresses: vec!["1.1.1.1:443".parse().unwrap()],
+        };
+
+        let allowed: Name = "EXAMPLE.COM".parse().unwrap();
+        assert_eq!(
+            resolver.resolve(allowed).await.unwrap().collect::<Vec<_>>(),
+            resolver.addresses
+        );
+        let denied: Name = "other.example".parse().unwrap();
+        assert!(resolver.resolve(denied).await.is_err());
+    }
+
+    async fn local_response(url: &str) -> Response {
+        crate::providers::http_client::build_http_client(5)
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .unwrap()
     }
 
     fn serve_once(response: &'static [u8]) -> String {
