@@ -128,12 +128,14 @@ pub async fn download_to_file(url: &str, dest: &Path, kind: DownloadKind) -> App
 }
 
 async fn read_error_body(mut response: Response) -> AppResult<String> {
+    let response_url = response.url().as_str().to_string();
     let mut body = Vec::with_capacity(ERROR_BODY_MAX_BYTES);
     let mut truncated = false;
     while body.len() < ERROR_BODY_MAX_BYTES {
-        let Some(chunk) = response.chunk().await.map_err(|error| {
-            AppError::Provider(format!("failed to read download error: {error}"))
-        })?
+        let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| AppError::Provider(format_http_error(&response_url, error)))?
         else {
             break;
         };
@@ -175,7 +177,7 @@ async fn request_url(url: &Url) -> AppResult<Response> {
         .get(url.clone())
         .send()
         .await
-        .map_err(|error| AppError::Provider(format_http_error(url.as_str(), &error)))?;
+        .map_err(|error| AppError::Provider(format_http_error(url.as_str(), error)))?;
     validate_remote_address(&response, &target)?;
     Ok(response)
 }
@@ -421,6 +423,7 @@ async fn write_response(
     expected_bytes: Option<u64>,
     policy: DownloadPolicy,
 ) -> AppResult<()> {
+    let response_url = response.url().as_str().to_string();
     let mut file = tokio::fs::File::create(temp_path)
         .await
         .map_err(|error| AppError::Provider(format!("failed to create download file: {error}")))?;
@@ -428,7 +431,7 @@ async fn write_response(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|error| AppError::Provider(error.to_string()))?
+        .map_err(|error| AppError::Provider(format_http_error(&response_url, error)))?
     {
         let chunk_bytes = u64::try_from(chunk.len())
             .map_err(|_| AppError::Provider("download chunk size overflow".into()))?;
@@ -517,7 +520,10 @@ mod tests {
 
     #[tokio::test]
     async fn interrupted_download_leaves_no_destination_or_temp_file() {
-        let url = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort");
+        let url = format!(
+            "{}?X-Amz-Signature=write-secret",
+            serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort")
+        );
         let dir = test_dir();
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let dest = dir.join("asset.bin");
@@ -527,6 +533,7 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("body") || error.to_string().contains("size"));
+        assert!(!error.to_string().contains("write-secret"));
         assert!(!dest.exists());
         assert!(download_temp_files(&dir).is_empty());
         let _ = tokio::fs::remove_dir_all(dir).await;
@@ -616,6 +623,21 @@ mod tests {
 
         assert_eq!(excerpt.len(), ERROR_BODY_MAX_BYTES + " [truncated]".len());
         assert!(excerpt.ends_with(" [truncated]"));
+    }
+
+    #[tokio::test]
+    async fn interrupted_error_body_does_not_expose_url_query() {
+        let url = format!(
+            "{}?X-Amz-Signature=error-secret",
+            serve_once(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 10\r\n\r\nshort")
+        );
+
+        let error = read_error_body(local_response(&url).await)
+            .await
+            .unwrap_err();
+
+        assert!(!error.to_string().contains("error-secret"));
+        assert!(!error.to_string().contains("X-Amz-Signature"));
     }
 
     #[test]

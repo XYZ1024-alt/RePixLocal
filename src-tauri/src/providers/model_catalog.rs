@@ -157,7 +157,7 @@ async fn get_models_json(url: &str, api_key: &str) -> AppResult<Value> {
         .header("Authorization", format!("Bearer {api_key}"))
         .send()
         .await
-        .map_err(|error| AppError::Provider(format_http_error(url, &error)))?;
+        .map_err(|error| AppError::Provider(format_http_error(url, error)))?;
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();

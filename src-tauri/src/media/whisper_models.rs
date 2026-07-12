@@ -177,7 +177,7 @@ async fn download_model_from_url(target: &Path, url: &str) -> AppResult<PathBuf>
         .get(url)
         .send()
         .await
-        .map_err(|error| AppError::Tool(format_http_error(url, &error)))?;
+        .map_err(|error| AppError::Tool(format_http_error(url, error)))?;
 
     if !response.status().is_success() {
         let status = response.status();

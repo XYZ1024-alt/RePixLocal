@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use reqwest::Client;
+use reqwest::{Client, Url};
 
 use crate::errors::{AppError, AppResult};
 
@@ -31,22 +31,51 @@ pub fn is_transient_provider_error(message: &str) -> bool {
     MARKERS.iter().any(|marker| lower.contains(marker))
 }
 
-pub fn format_http_error(context: &str, error: &reqwest::Error) -> String {
+pub fn format_http_error(context: &str, error: reqwest::Error) -> String {
+    let is_connect = error.is_connect();
+    let is_timeout = error.is_timeout();
+    let status = error.status();
+    let request_url = error.url().map(|url| redact_parsed_url(url.clone()));
+    let error = error.without_url();
+    let context = redact_http_url(context);
+
     let mut parts = vec![format!("{context}: {error}")];
-    if error.is_connect() {
-        parts.push("connection failed — check network or firewall".to_string());
+    if let Some(request_url) = request_url.filter(|url| url != &context) {
+        parts.push(format!("request URL: {request_url}"));
     }
-    if error.is_timeout() {
+    if is_connect {
+        parts.push("connection failed - check network or firewall".to_string());
+    }
+    if is_timeout {
         parts.push("request timed out".to_string());
     }
-    if let Some(status) = error.status() {
+    if let Some(status) = status {
         parts.push(format!("HTTP status {status}"));
     }
     parts.join("; ")
 }
 
+fn redact_http_url(raw: &str) -> String {
+    Url::parse(raw)
+        .map(redact_parsed_url)
+        .unwrap_or_else(|_| "HTTP request".to_string())
+}
+
+fn redact_parsed_url(mut url: Url) -> String {
+    if url.set_password(None).is_err() || url.set_username("").is_err() {
+        return "HTTP request".to_string();
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
+}
+
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
+    use std::net::TcpListener;
+    use std::thread;
+
     use super::*;
 
     #[test]
@@ -62,5 +91,62 @@ mod tests {
         assert!(!is_transient_provider_error(
             "Seedance poll error (401): unauthorized"
         ));
+    }
+
+    #[test]
+    fn redacts_url_credentials_query_and_fragment() {
+        assert_eq!(
+            redact_http_url(
+                "https://user:password@example.com/media/file.mp4?X-Amz-Signature=secret#token"
+            ),
+            "https://example.com/media/file.mp4"
+        );
+        assert_eq!(redact_http_url("not a URL?token=secret"), "HTTP request");
+    }
+
+    #[tokio::test]
+    async fn formatted_http_errors_do_not_expose_request_secrets() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request);
+            thread::sleep(Duration::from_millis(200));
+        });
+        let secret_url = format!(
+            "http://user:password@{address}/asset?X-Amz-Signature=request-secret#fragment-secret"
+        );
+        let error = Client::builder()
+            .timeout(Duration::from_millis(25))
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(&secret_url)
+            .send()
+            .await
+            .unwrap_err();
+
+        let message = format_http_error(
+            "https://context.example/download?token=context-secret#context-fragment",
+            error,
+        );
+
+        assert!(message.contains("request timed out"));
+        assert!(is_transient_provider_error(&message));
+        for secret in [
+            "user",
+            "password",
+            "request-secret",
+            "fragment-secret",
+            "context-secret",
+            "context-fragment",
+        ] {
+            assert!(
+                !message.contains(secret),
+                "message leaked {secret}: {message}"
+            );
+        }
+        assert!(message.contains(&format!("http://{address}/asset")));
     }
 }

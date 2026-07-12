@@ -102,7 +102,7 @@ impl TongyiClient {
             .json(&payload)
             .send()
             .await
-            .map_err(|error| AppError::Provider(format_http_error(&url, &error)))?;
+            .map_err(|error| AppError::Provider(format_http_error(&url, error)))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
