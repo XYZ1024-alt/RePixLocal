@@ -6,6 +6,15 @@ type E2eControls = {
   failListRuns: boolean;
   listRunsCalls: number;
   listRunsDelayMs: number;
+  whisperActiveModel: string | null;
+  whisperCheckResults: boolean[];
+  whisperDownloaded: boolean;
+  whisperEnsureCalls: number;
+  whisperEnsureDelayMs: number;
+  whisperEnsureFails: boolean;
+  whisperEnsureSuccesses: string[];
+  whisperEvents: Array<"check" | "ensure-error" | "ensure-start" | "ensure-success">;
+  whisperSettledCheckDelayMs: number;
 };
 
 const MOCK_RETRY_DELAY_MS = 500;
@@ -110,6 +119,96 @@ test("refreshes dashboard on navigation and run events", async ({ page }) => {
   );
 });
 
+test("rechecks tools after the background Whisper download settles", async ({ page }) => {
+  await installTauriMock(page, {
+    whisperDownloaded: false,
+    whisperEnsureDelayMs: 200
+  });
+  await page.goto("/");
+
+  await expect.poll(async () => (await getMockControls(page)).whisperEnsureCalls).toBe(1);
+  await expect
+    .poll(async () => (await getMockControls(page)).whisperCheckResults.at(-1))
+    .toBe(true);
+
+  const controls = await getMockControls(page);
+  expect(controls.whisperEnsureCalls).toBe(1);
+  expect(controls.whisperCheckResults[0]).toBe(false);
+  expect(controls.whisperEvents.lastIndexOf("check")).toBeGreaterThan(
+    controls.whisperEvents.indexOf("ensure-success")
+  );
+});
+
+test("surfaces background Whisper failures and accepts a retry during the final check", async ({ page }) => {
+  await installTauriMock(page, {
+    whisperDownloaded: false,
+    whisperEnsureDelayMs: 200,
+    whisperEnsureFails: true,
+    whisperSettledCheckDelayMs: 5_000
+  });
+  await page.goto("/");
+
+  await expect(page.getByText("whisper download unavailable", { exact: false })).toBeVisible();
+  await setMockControls(page, {
+    whisperEnsureDelayMs: 0,
+    whisperEnsureFails: false,
+    whisperSettledCheckDelayMs: 0
+  });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("tab", { name: "System Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Re-check", exact: true }).click();
+
+  await expect.poll(async () => (await getMockControls(page)).whisperEnsureCalls).toBe(2);
+  await expect
+    .poll(async () => (await getMockControls(page)).whisperEnsureSuccesses)
+    .toEqual(["base"]);
+  await expect
+    .poll(async () => {
+      const events = (await getMockControls(page)).whisperEvents;
+      return events.lastIndexOf("check") > events.indexOf("ensure-error");
+    })
+    .toBe(true);
+});
+
+test("keeps a queued Whisper model when the settled model is requested again", async ({ page }) => {
+  await installTauriMock(page, {
+    whisperDownloaded: false,
+    whisperEnsureDelayMs: 5_000,
+    whisperSettledCheckDelayMs: 5_000
+  });
+  await page.goto("/");
+
+  await expect.poll(async () => (await getMockControls(page)).whisperActiveModel).toBe("base");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("tab", { name: "System Settings", exact: true }).click();
+  await page.getByRole("combobox", { name: "Whisper Model", exact: true }).click();
+  await page.getByRole("option", { name: "Small (balanced)", exact: true }).click();
+  expect((await getMockControls(page)).whisperActiveModel).toBe("base");
+  await page.getByRole("button", { name: "Re-check", exact: true }).click();
+
+  await expect
+    .poll(async () => (await getMockControls(page)).whisperEnsureSuccesses)
+    .toEqual(["base"]);
+  await expect
+    .poll(async () => {
+      const events = (await getMockControls(page)).whisperEvents;
+      return events.lastIndexOf("check") > events.indexOf("ensure-success");
+    })
+    .toBe(true);
+  await setMockControls(page, {
+    whisperEnsureDelayMs: 0,
+    whisperSettledCheckDelayMs: 0
+  });
+  await page.getByRole("combobox", { name: "Whisper Model", exact: true }).click();
+  await page.getByRole("option", { name: "Base (recommended)", exact: true }).click();
+  await page.getByRole("button", { name: "Re-check", exact: true }).click();
+
+  await expect
+    .poll(async () => (await getMockControls(page)).whisperEnsureSuccesses)
+    .toEqual(["base", "small"]);
+  expect((await getMockControls(page)).whisperEnsureCalls).toBe(2);
+});
+
 function dashboardMetric(page: Page, label: string) {
   return page.getByText(label, { exact: true }).locator("..").locator("span").nth(1);
 }
@@ -148,8 +247,8 @@ async function getMockControls(page: Page) {
   );
 }
 
-async function installTauriMock(page: Page) {
-  await page.addInitScript(() => {
+async function installTauriMock(page: Page, initialControls: Partial<E2eControls> = {}) {
+  await page.addInitScript((initialControls: Partial<E2eControls>) => {
     localStorage.setItem("LOCALE", "en");
 
     type Callback = (data: unknown) => void;
@@ -182,7 +281,17 @@ async function installTauriMock(page: Page) {
       failListAssets: false,
       failListRuns: false,
       listRunsCalls: 0,
-      listRunsDelayMs: 0
+      listRunsDelayMs: 0,
+      whisperActiveModel: null,
+      whisperCheckResults: [],
+      whisperDownloaded: true,
+      whisperEnsureCalls: 0,
+      whisperEnsureDelayMs: 0,
+      whisperEnsureFails: false,
+      whisperEnsureSuccesses: [],
+      whisperEvents: [],
+      whisperSettledCheckDelayMs: 0,
+      ...initialControls
     };
 
     const now = "2026-06-20T12:00:00.000Z";
@@ -331,6 +440,16 @@ async function installTauriMock(page: Page) {
             mock_providers: true,
             whisper_model_dir: "C:\\repix-e2e\\models\\whisper"
           };
+        case "list_provider_credentials":
+          return [];
+        case "list_dashscope_credentials":
+          return {
+            masked_key: "",
+            base_url: null,
+            qwen_vl_model: null,
+            tongyi_model: null,
+            cosyvoice_model: null
+          };
         case "get_dashboard_data":
           return dashboardData();
         case "list_runs":
@@ -393,21 +512,72 @@ async function installTauriMock(page: Page) {
               message: "Seedance Ark API key cannot query account balance"
             }
           ];
-        case "ensure_whisper_model":
+        case "ensure_whisper_model": {
+          const modelName = String(args?.model ?? "base");
+          controls.whisperEnsureCalls += 1;
+          if (controls.whisperActiveModel) {
+            throw new Error(
+              `whisper model download already in progress: ${controls.whisperActiveModel}`
+            );
+          }
+          controls.whisperActiveModel = modelName;
+          controls.whisperEvents.push("ensure-start");
+          try {
+            if (controls.whisperEnsureDelayMs > 0) {
+              await new Promise((resolve) =>
+                window.setTimeout(resolve, controls.whisperEnsureDelayMs)
+              );
+            }
+            if (controls.whisperEnsureFails) {
+              throw new Error("whisper download unavailable");
+            }
+            controls.whisperDownloaded = true;
+            controls.whisperEnsureSuccesses.push(modelName);
+            controls.whisperEvents.push("ensure-success");
+            return {
+              model_name: modelName,
+              downloaded: true,
+              path: `C:\\repix-e2e\\models\\whisper\\ggml-${modelName}.bin`
+            };
+          } catch (error) {
+            controls.whisperEvents.push("ensure-error");
+            throw error;
+          } finally {
+            controls.whisperActiveModel = null;
+          }
+        }
         case "get_whisper_model_status":
           return {
-            model_name: "base",
-            downloaded: true,
+            model_name: String(args?.model ?? "base"),
+            downloaded: controls.whisperDownloaded,
             path: "C:\\repix-e2e\\models\\whisper\\ggml-base.bin"
           };
         case "check_ffmpeg":
+          controls.whisperEvents.push("check");
+          if (
+            controls.whisperSettledCheckDelayMs > 0 &&
+            controls.whisperEvents.some((event) =>
+              event === "ensure-error" || event === "ensure-success"
+            )
+          ) {
+            await new Promise((resolve) =>
+              window.setTimeout(resolve, controls.whisperSettledCheckDelayMs)
+            );
+          }
           if (createdTaskTitle) {
             await new Promise((resolve) => window.setTimeout(resolve, submittedRefreshDelayMs));
           }
+          controls.whisperCheckResults.push(controls.whisperDownloaded);
           return [
             { name: "ffmpeg", found: true, path: "bundled", bundled: true },
             { name: "ffprobe", found: true, path: "bundled", bundled: true },
-            { name: "whisper", found: true, path: "bundled", bundled: true }
+            {
+              name: "whisper",
+              found: controls.whisperDownloaded,
+              path: "bundled",
+              bundled: true,
+              error: controls.whisperDownloaded ? null : "whisper model missing"
+            }
           ];
         case "pick_video_file":
           return {
@@ -464,5 +634,5 @@ async function installTauriMock(page: Page) {
     mockWindow.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
       unregisterListener: (_event: string, id: number) => unregisterCallback(id)
     };
-  });
+  }, initialControls);
 }

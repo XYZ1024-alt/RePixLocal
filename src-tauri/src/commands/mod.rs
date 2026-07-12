@@ -345,29 +345,7 @@ pub async fn list_logs(task_id: String, state: State<'_, AppState>) -> Result<Ve
 
 #[tauri::command]
 pub async fn check_ffmpeg(state: State<'_, AppState>) -> Result<Vec<ToolCheck>, String> {
-    let (model_name, model_dir) = {
-        let config = state.config.read().await;
-        (
-            config
-                .asr_model
-                .clone()
-                .unwrap_or_else(|| "base".to_string()),
-            config.whisper_model_dir.clone(),
-        )
-    };
-
     let mut tools = state.ffmpeg.check_tools().await;
-    if resolve_whisper_cli_available(&state).await {
-        if let Err(error) = whisper_models::ensure_whisper_model(
-            &state.workspace,
-            model_dir.as_deref(),
-            &model_name,
-        )
-        .await
-        {
-            tracing::warn!("whisper model ensure failed during tool check: {error}");
-        }
-    }
     tools.push(state.whisper.check_tool(&state.workspace).await);
     Ok(tools)
 }
@@ -430,16 +408,6 @@ fn merge_whisper_download_state(
     status.bytes_total = download.bytes_total;
     status.error.clone_from(&download.error);
     status
-}
-
-async fn resolve_whisper_cli_available(state: &AppState) -> bool {
-    let config = state.config.read().await;
-    crate::media::bundled_tools::resolve_tool_path(
-        config.whisper_bin.as_deref(),
-        "whisper-cli",
-        "whisper-cli",
-    )
-    .is_some_and(|path| path.exists() && crate::media::bundled_tools::is_executable_file(&path))
 }
 
 #[tauri::command]

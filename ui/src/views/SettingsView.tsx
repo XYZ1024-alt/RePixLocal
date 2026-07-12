@@ -13,7 +13,6 @@ import {
   Wrench
 } from "lucide-react";
 import {
-  ensureWhisperModel,
   getWhisperModelStatus,
   listDashscopeCredentials,
   listProviderCredentials,
@@ -67,6 +66,7 @@ const DEFAULT_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/api/v1";
 export function SettingsView(props: {
   settings: Settings;
   tools: ToolCheck[];
+  onEnsureWhisperModel: (model?: string) => void;
   onRefresh: () => Promise<void>;
   onSettingsSaved: (settings: Settings) => void;
   onMessage: (value: string) => void;
@@ -134,6 +134,8 @@ export function SettingsView(props: {
             <SystemSettingsForm
               initialSettings={props.settings}
               tools={props.tools}
+              onEnsureWhisperModel={props.onEnsureWhisperModel}
+              onMessage={props.onMessage}
               onRefresh={props.onRefresh}
               onSaved={props.onSettingsSaved}
             />
@@ -907,6 +909,8 @@ const toolIcon: Record<string, React.ComponentType<{ className?: string }>> = {
 function SystemSettingsForm(props: {
   initialSettings: Settings;
   tools: ToolCheck[];
+  onEnsureWhisperModel: (model?: string) => void;
+  onMessage: (value: string) => void;
   onRefresh: () => Promise<void>;
   onSaved: (settings: Settings) => void;
 }) {
@@ -937,14 +941,13 @@ function SystemSettingsForm(props: {
   }, [asrModel, props.tools]);
 
   async function handleRecheck() {
+    props.onEnsureWhisperModel(asrModel);
     try {
-      await ensureWhisperModel(asrModel);
-    } catch {
-      // check_ffmpeg surfaces errors in the tool list.
+      await props.onRefresh();
+      setModelStatus(await getWhisperModelStatus(asrModel));
+    } catch (error) {
+      props.onMessage(String(error));
     }
-    await props.onRefresh();
-    const status = await getWhisperModelStatus(asrModel).catch(() => null);
-    setModelStatus(status);
   }
 
   async function handleSave(event: React.FormEvent) {

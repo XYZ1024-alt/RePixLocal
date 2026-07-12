@@ -20,6 +20,20 @@ export function App() {
   const [tools, setTools] = useState<ToolCheck[]>([]);
   const [message, setMessage] = useState("");
   const latestDashboardRequest = useRef(0);
+  const latestToolsRequest = useRef(0);
+  const whisperDownloadQueue = useRef<{
+    activeModel: string | null;
+    pendingModels: string[];
+    running: boolean;
+    settledModel: string | null;
+    settledSucceeded: boolean;
+  }>({
+    activeModel: null,
+    pendingModels: [],
+    running: false,
+    settledModel: null,
+    settledSucceeded: false
+  });
 
   const refreshDashboard = useCallback(async () => {
     const requestId = ++latestDashboardRequest.current;
@@ -33,17 +47,69 @@ export function App() {
     }
   }, []);
 
+  const refreshTools = useCallback(async () => {
+    const requestId = ++latestToolsRequest.current;
+    try {
+      const nextTools = await checkFfmpeg();
+      if (requestId === latestToolsRequest.current) {
+        setTools(nextTools);
+      }
+    } catch (error) {
+      if (requestId === latestToolsRequest.current) throw error;
+    }
+  }, []);
+
+  const startWhisperDownload = useCallback((model?: string) => {
+    const modelName = model?.trim() || "base";
+    const queue = whisperDownloadQueue.current;
+    if (queue.activeModel === modelName) return;
+    if (queue.settledModel === modelName && queue.settledSucceeded) return;
+    if (queue.pendingModels.includes(modelName)) return;
+
+    queue.pendingModels.push(modelName);
+    if (queue.running) return;
+    queue.running = true;
+
+    void (async () => {
+      try {
+        while (queue.pendingModels.length > 0) {
+          const nextModel = queue.pendingModels.shift() as string;
+          queue.activeModel = nextModel;
+          let succeeded = false;
+          try {
+            await ensureWhisperModel(nextModel);
+            succeeded = true;
+          } catch (error) {
+            setMessage(String(error));
+          } finally {
+            queue.activeModel = null;
+            queue.settledModel = nextModel;
+            queue.settledSucceeded = succeeded;
+            try {
+              await refreshTools();
+            } catch (error) {
+              setMessage(String(error));
+            } finally {
+              queue.settledModel = null;
+              queue.settledSucceeded = false;
+            }
+          }
+        }
+      } finally {
+        queue.activeModel = null;
+        queue.settledModel = null;
+        queue.settledSucceeded = false;
+        queue.running = false;
+      }
+    })();
+  }, [refreshTools]);
+
   const refresh = useCallback(async () => {
     const nextSettings = await getSettings();
     setSettings(nextSettings);
-    try {
-      await ensureWhisperModel(nextSettings.asr_model);
-    } catch {
-      // Tool check below surfaces download errors.
-    }
-    const nextTools = await checkFfmpeg();
-    setTools(nextTools);
-  }, []);
+    startWhisperDownload(nextSettings.asr_model);
+    await refreshTools();
+  }, [refreshTools, startWhisperDownload]);
 
   useEffect(() => {
     refresh().catch((error) => setMessage(String(error)));
@@ -129,15 +195,8 @@ export function App() {
         <SettingsView
           settings={settings}
           tools={tools}
-          onRefresh={async () => {
-            try {
-              await ensureWhisperModel(settings.asr_model);
-            } catch {
-              // checkFfmpeg reports tool errors.
-            }
-            const nextTools = await checkFfmpeg();
-            setTools(nextTools);
-          }}
+          onEnsureWhisperModel={startWhisperDownload}
+          onRefresh={refreshTools}
           onSettingsSaved={setSettings}
           onMessage={setMessage}
         />
