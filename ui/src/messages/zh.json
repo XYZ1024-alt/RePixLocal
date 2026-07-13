@@ -1,6 +1,10 @@
 {
   "nav": {
     "brand": "RePix",
+    "home": "首页",
+    "tasks": "任务",
+    "assets": "素材",
+    "primaryNavigation": "主导航",
     "dashboard": "总览",
     "newTask": "新建任务",
     "console": "控制台",
@@ -16,7 +20,13 @@
   "shell": {
     "allSystemsOperational": "系统运行正常",
     "attentionRequired": "需要关注",
-    "dismiss": "关闭"
+    "dismiss": "关闭",
+    "toggleSidebar": "展开或收起侧栏",
+    "checking": "正在检查",
+    "ready": "已就绪",
+    "newTask": "新建任务",
+    "unexpectedError": "操作未完成",
+    "technicalDetails": "技术详情"
   },
   "metadata": {
     "title": "RePix",
@@ -38,6 +48,8 @@
     "running": "运行中",
     "completed": "已完成",
     "successRate": "成功率",
+    "needsAttention": "需要处理",
+    "needsAttentionNote": "失败、暂停或草稿任务",
     "assetsReady": "{count} 个素材就绪",
     "livePipelines": "实时流水线",
     "completedRuns": "已完成运行",
@@ -79,7 +91,48 @@
       "not_configured": "未配置",
       "error": "错误"
     },
-    "openConsole": "打开控制台"
+    "openConsole": "打开控制台",
+    "loading": "正在加载首页",
+    "task": "任务",
+    "stage": "阶段",
+    "progress": "进度",
+    "state": "状态"
+  },
+  "tasks": {
+    "title": "任务",
+    "description": "创建、监控并交付所有视频任务",
+    "newTask": "新建任务",
+    "searchLabel": "搜索任务",
+    "searchPlaceholder": "按任务标题搜索",
+    "filterLabel": "任务状态筛选",
+    "filters": { "all": "全部", "running": "运行中", "attention": "需处理", "completed": "已完成" },
+    "empty": "还没有任务。创建第一个任务后可在这里跟踪进度。",
+    "emptyFiltered": "当前筛选条件下没有任务。",
+    "loadError": "无法加载任务。",
+    "refreshError": "刷新失败，当前显示 {time} 的数据：{message}",
+    "retry": "重试",
+    "never": "尚未更新",
+    "notStarted": "尚未开始",
+    "openTask": "打开任务 {title}",
+    "backToTasks": "返回任务列表",
+    "detailTitle": "任务详情",
+    "taskUnavailable": "找不到该任务或任务已不可用。",
+    "noRunsYet": "暂无运行记录",
+    "errorDetails": "错误详情",
+    "actionFailed": "操作失败",
+    "refreshFailed": "数据刷新失败",
+    "lastUpdated": "最后更新：{time}",
+    "progressLabel": "总体进度 {value}%",
+    "start": "开始运行",
+    "resume": "恢复运行",
+    "cancel": "取消运行",
+    "cancelDialog": { "title": "取消当前运行？", "description": "已经产生的阶段产物会保留，稍后可以从断点恢复。", "keepRunning": "继续运行", "confirm": "确认取消" },
+    "draft": { "title": "任务已创建，尚未运行", "source": "来源", "type": "类型", "assets": "已有素材", "description": "开始运行后，阶段进度、日志和产物会显示在这里。" },
+    "taskTypes": { "replicate": "视频复刻", "image_to_video": "图生视频" },
+    "unknown": "未知",
+    "table": { "caption": "任务列表", "task": "任务", "status": "状态", "stage": "当前阶段", "runs": "运行次数", "updated": "更新时间", "actions": "操作" },
+    "statuses": { "DRAFT": "草稿", "PENDING": "待处理", "RUNNING": "运行中", "COMPLETED": "已完成", "FAILED": "已失败", "PAUSED": "已暂停", "CANCELLED": "已取消", "CANCELED": "已取消" },
+    "stages": { "TRANSCRIPT_EXTRACTION": "转写与音频提取", "SCRIPT_REWRITE": "关键帧分析与文案改写", "SCRIPT_PLANNING": "图片分析与脚本规划", "STORYBOARD_GENERATION": "分镜图生成", "TTS_SYNTHESIS": "配音合成", "SEGMENT_GENERATION": "视频片段生成", "FINAL_RENDER": "成片封装" }
   },
   "console": {
     "loadError": "无法加载流水线运行记录。",
@@ -93,7 +146,7 @@
     "backToList": "返回列表",
     "cancelRun": "取消运行",
     "resumeRun": "恢复运行",
-    "stages": "阶段",
+    "stagesTitle": "阶段",
     "liveLog": "实时日志",
     "assetsTitle": "任务素材",
     "finalOutputTitle": "成片输出",
@@ -111,10 +164,22 @@
     "streaming": "推送中",
     "idle": "空闲",
     "disconnected": "已断开",
+    "detailTabs": { "label": "任务详情视图", "overview": "概览", "assets": "素材", "runs": "运行记录", "logsAndCosts": "日志与成本" },
+    "runHistory": { "caption": "运行记录", "run": "运行", "status": "状态", "stage": "阶段", "created": "创建时间" },
+    "statuses": { "PENDING": "待处理", "RUNNING": "运行中", "COMPLETED": "已完成", "FAILED": "已失败", "PAUSED": "已暂停", "CANCELLED": "已取消", "CANCELED": "已取消" },
+    "stages": { "TRANSCRIPT_EXTRACTION": "转写与音频提取", "SCRIPT_REWRITE": "关键帧分析与文案改写", "SCRIPT_PLANNING": "图片分析与脚本规划", "STORYBOARD_GENERATION": "分镜图生成", "TTS_SYNTHESIS": "配音合成", "SEGMENT_GENERATION": "视频片段生成", "FINAL_RENDER": "成片封装" },
+    "progressLabel": "任务进度 {value}%",
+    "refreshWarning": "刷新失败，当前显示 {time} 的数据：{message}",
+    "finalOutputUnavailable": "成片暂不可用。",
+    "finalOutputPending": "任务完成后，成片会显示在这里。",
+    "assetStatuses": { "READY": "已就绪", "GENERATING": "生成中", "FAILED": "已失败", "PENDING": "待处理" },
     "stageStatus": {
+      "pending": "待处理",
       "running": "进行中",
+      "completed": "已完成",
       "done": "已完成",
       "failed": "已失败",
+      "cancelled": "已取消",
       "queued": "队列中"
     }
   },
@@ -124,6 +189,11 @@
     "title": "媒体与素材库",
     "description": "已生成的分镜帧、片段、音频和最终成片",
     "upload": "上传",
+    "newTask": "新建任务",
+    "search": "搜索素材",
+    "searchPlaceholder": "搜索任务或文件名",
+    "taskFilter": "按任务筛选",
+    "allTasks": "全部任务",
     "empty": "暂无素材。从向导提交任务后即可生成。",
     "signingError": "素材预览签名失败",
     "sceneLabel": "场景 {index}",
@@ -137,7 +207,8 @@
     }
   },
   "assets": {
-    "viewAll": "查看全部（{count}）",
+    "viewAll": "共 {count} 项",
+    "openInFolder": "在文件夹中打开",
     "sections": {
       "final": "成片",
       "images": "图像（分镜帧）",
@@ -152,7 +223,6 @@
       "REWRITTEN_SCRIPT": "改写脚本",
       "STORYBOARD_FRAME": "分镜图",
       "VIDEO_SEGMENT": "视频片段",
-      "SUBTITLE": "字幕",
       "FINAL_VIDEO": "成片"
     }
   },
@@ -188,7 +258,6 @@
     "sceneCount": "场景数量",
     "sourceSubtitleTreatment": "原字幕处理",
     "sourceSubtitleRegionRatio": "原字幕区域高度（%）",
-    "subtitlePosition": "字幕位置",
     "unsupportedType": "不支持的文件类型，请使用 MP4 或 MOV。",
     "tooLarge": "文件超过 500MB 限制。",
     "selectFirst": "请先选择源视频。",
@@ -199,8 +268,31 @@
     "done": "完成，正在跳转...",
     "createRun": "创建并运行",
     "cancel": "取消",
+    "back": "返回",
+    "continue": "继续",
+    "sourceStepTitle": "选择任务来源",
+    "configureStepTitle": "配置输出",
+    "reviewStepTitle": "确认并运行",
+    "chooseVideo": "选择本地视频",
+    "advancedOptions": "高级选项",
+    "source": "来源",
+    "imageCount": "{count} 张图片",
+    "removeImage": "移除场景 {index}",
+    "readinessAttention": "运行环境需要关注",
+    "readinessIssues": "发现 {count} 项待处理配置，可稍后前往设置修复。",
+    "openSettings": "打开设置",
+    "submitFailed": "任务提交失败",
+    "technicalDetails": "技术详情",
+    "leaveDraftTitle": "离开新建任务？",
+    "leaveDraftDescription": "当前配置可以保留在本次应用会话中，也可以立即丢弃。",
+    "stay": "继续编辑",
+    "discardDraft": "丢弃草稿",
+    "keepDraft": "保留并离开",
     "steps": {
+      "label": "新建任务步骤",
       "source": "源视频",
+      "configure": "配置",
+      "review": "确认",
       "options": "选项",
       "upload": "上传",
       "submit": "提交",
@@ -244,11 +336,6 @@
         "blur": "模糊弱化",
         "none": "不处理"
       },
-      "subtitlePosition": {
-        "bottom": "底部",
-        "center": "中间",
-        "top": "顶部"
-      },
       "taskType": {
         "replicate": "视频复刻",
         "image_to_video": "图生视频"
@@ -286,6 +373,7 @@
     "FAILED": "已失败",
     "PAUSED": "已暂停",
     "CANCELLED": "已取消",
+    "CANCELED": "已取消",
     "GENERATING": "生成中",
     "READY": "已就绪",
     "SKIPPED": "已跳过",
@@ -318,6 +406,11 @@
     "keyDecryptFailedBadge": "需重新输入",
     "savedSuccessfully": "保存成功",
     "failedToSave": "保存失败",
+    "errorDetails": "错误详情",
+    "revealApiKey": "显示 API 密钥",
+    "hideApiKey": "隐藏 API 密钥",
+    "ready": "已就绪",
+    "failed": "失败",
     "failedToSaveKey": "保存密钥失败，请检查密钥是否有效",
     "failedToFetchModels": "获取模型列表失败，请检查密钥和网络",
     "noModelsAvailable": "未找到可用模型",
@@ -325,7 +418,7 @@
     "currentlySaved": "当前已保存：{maskedKey}",
     "keyChangedWarning": "密钥已修改，请点击「获取可用模型」重新获取模型列表",
     "fetchModelsFirst": "请先点击「获取可用模型」验证密钥并选择模型",
-    "fetchModelsToSelect": "请先点击「获取可用模型」",
+    "fetchModelsToSelect": "请先获取模型",
     "mustFetchModels": "请先获取模型列表，然后从列表中选择模型",
     "advancedOptions": "高级选项",
     "dashscope": {
@@ -381,6 +474,33 @@
     "fetchingModels": "加载中...",
     "selectModel": "选择模型",
     "useCustomModel": "手动输入模型名称",
-    "useProviderModels": "使用官方模型列表"
+    "useProviderModels": "使用官方模型列表",
+    "tabs": {
+      "aiServices": "AI 服务",
+      "localRuntime": "本地运行时",
+      "appearance": "外观与语言"
+    },
+    "readiness": {
+      "title": "应用就绪度",
+      "ready": "可以开始创建任务",
+      "attention": "还有配置需要处理",
+      "mockDescription": "当前使用 Mock 提供商，AI 服务密钥不是必需项。",
+      "realDescription": "当前使用真实服务，运行前需要完成本地工具和 AI 服务配置。",
+      "localRuntime": "本地运行时",
+      "aiServices": "AI 服务",
+      "readyCount": "{count}/{total} 项就绪",
+      "downloading": "Whisper 模型下载中",
+      "failed": "模型检查失败"
+    },
+    "appearance": {
+      "title": "外观与语言",
+      "description": "选择应用主题和界面语言。",
+      "theme": "主题",
+      "resolvedTheme": "当前显示为{theme}主题",
+      "themeOptions": { "system": "跟随系统", "light": "浅色", "dark": "深色" },
+      "language": "界面语言",
+      "languageDescription": "更改后立即应用到整个应用。",
+      "languageOptions": { "zh": "中文", "en": "English" }
+    }
   }
 }

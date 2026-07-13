@@ -32,7 +32,8 @@ const ASSET_TYPE_MAP: Record<string, string> = {
   keyframe: "STORYBOARD_FRAME",
   generated_frame: "STORYBOARD_FRAME",
   video_segment: "VIDEO_SEGMENT",
-  subtitle: "SUBTITLE",
+  transcript: "TRANSCRIPT",
+  subtitle: "TRANSCRIPT",
   final_video: "FINAL_VIDEO"
 };
 

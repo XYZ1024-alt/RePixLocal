@@ -1,10 +1,58 @@
-export type ViewKey =
-  | "dashboard"
-  | "wizard"
-  | "console"
-  | "console-detail"
-  | "library"
+import type { TaskConfig } from "@/lib/task-schema";
+
+export type AppRoute =
+  | "home"
+  | "tasks"
+  | "task-detail"
+  | "new-task"
+  | "assets"
   | "settings";
+
+export type ViewKey = AppRoute;
+
+export type TaskFilter = "all" | "running" | "attention" | "completed";
+
+export type NavigationIntent = {
+  route: AppRoute;
+  taskFilter?: TaskFilter;
+  taskId?: string;
+  runId?: string | null;
+};
+
+export type AsyncState<T> =
+  | { status: "loading"; data: T | null; error: null }
+  | { status: "ready"; data: T; error: null }
+  | { status: "error"; data: T | null; error: string };
+
+export type ReadinessIssue = {
+  id: string;
+  label: string;
+  detail: string;
+  severity: "warning" | "error";
+};
+
+export type ReadinessState = {
+  status: "checking" | "ready" | "attention";
+  mockMode: boolean;
+  issues: ReadinessIssue[];
+};
+
+export type TaskSummary = {
+  task: Task;
+  latestRun: RunListItem | null;
+  runs: RunListItem[];
+  status: string;
+  currentStage: string | null;
+  updatedAt: string;
+};
+
+export type WizardDraft = {
+  title: string;
+  file: PickedVideoFile | null;
+  images: PickedImageFile[];
+  config: TaskConfig;
+  step: 0 | 1 | 2;
+};
 
 export type TaskStatus = "draft" | "running" | "completed" | "failed" | "canceled";
 

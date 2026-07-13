@@ -1,65 +1,80 @@
-import { Bell, Circle, Maximize2, Menu } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Menu, Plus } from "lucide-react";
 import type { ReactNode } from "react";
 import { Sidebar } from "@/components/Sidebar";
+import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { useTranslations } from "@/i18n/context";
 import { cn } from "@/lib/utils";
-import type { ViewKey } from "@/types";
+import type { AppRoute, ReadinessState } from "@/types";
 
-export function Shell(props: {
-  activeView: ViewKey;
+export function Shell({
+  activeRoute,
+  children,
+  collapsed,
+  readiness,
+  onNavigate,
+  onNewTask,
+  onToggleSidebar
+}: {
+  activeRoute: AppRoute;
   children: ReactNode;
-  hasError: boolean;
-  onNavigate: (view: ViewKey) => void;
+  collapsed: boolean;
+  readiness: ReadinessState;
+  onNavigate: (route: AppRoute) => void;
+  onNewTask: () => void;
+  onToggleSidebar: () => void;
 }) {
   const t = useTranslations("shell");
+  const ready = readiness.status === "ready";
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar activeView={props.activeView} onNavigate={props.onNavigate} />
-      <main className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-black">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-zinc-800 bg-black/80 px-4 backdrop-blur-xl lg:px-6">
-          <div className="flex items-center gap-3">
+    <div className="flex h-full w-full overflow-hidden bg-background text-foreground">
+      <Sidebar activeRoute={activeRoute} collapsed={collapsed} onNavigate={onNavigate} />
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-border bg-background/80 px-3 backdrop-blur-xl sm:px-5">
+          <IconButton
+            type="button"
+            variant="ghost"
+            tooltip={t("toggleSidebar")}
+            onClick={onToggleSidebar}
+          >
+            <Menu aria-hidden="true" />
+          </IconButton>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              className="flex size-9 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900 text-zinc-400 transition-colors hover:border-cyan-500/50 hover:bg-cyan-950/20 hover:text-cyan-300"
-            >
-              <Menu className="size-4" />
-            </button>
-          </div>
-          <div className="flex items-center gap-3">
-            <div
+              onClick={() => onNavigate("settings")}
               className={cn(
-                "hidden items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold backdrop-blur sm:flex",
-                props.hasError
-                  ? "border-red-900/50 bg-red-950/40 text-red-200"
-                  : "border-cyan-500/20 bg-cyan-950/20 text-cyan-100"
+                "flex h-8 items-center gap-2 rounded-md border px-2.5 text-xs font-medium transition-colors duration-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                ready
+                  ? "border-success/25 bg-success/10 text-success"
+                  : "border-warning/30 bg-warning/10 text-warning"
               )}
+              aria-label={
+                readiness.status === "checking"
+                  ? t("checking")
+                  : ready
+                    ? t("ready")
+                    : t("attentionRequired")
+              }
+              aria-live="polite"
             >
-              <Circle
-                className={cn(
-                  "size-2 fill-current",
-                  props.hasError
-                    ? "text-red-500"
-                    : "animate-pulse-glow text-cyan-400 shadow-glow"
-                )}
-              />
-              {props.hasError ? t("attentionRequired") : t("allSystemsOperational")}
-            </div>
-            <button
-              type="button"
-              className="flex size-9 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900 text-zinc-400 transition-colors hover:border-cyan-500/50 hover:bg-cyan-950/20 hover:text-cyan-300"
-            >
-              <Bell className="size-4" />
+              {ready ? <CheckCircle2 className="size-3.5" /> : <AlertTriangle className="size-3.5" />}
+              <span className="hidden sm:inline">
+                {readiness.status === "checking"
+                  ? t("checking")
+                  : ready
+                    ? t("ready")
+                    : t("attentionRequired")}
+              </span>
             </button>
-            <button
-              type="button"
-              className="flex size-9 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900 text-zinc-400 transition-colors hover:border-cyan-500/50 hover:bg-cyan-950/20 hover:text-cyan-300"
-            >
-              <Maximize2 className="size-4" />
-            </button>
+            <Button aria-label={t("newTask")} size="sm" onClick={onNewTask} data-testid="global-new-task">
+              <Plus aria-hidden="true" />
+              <span className="hidden sm:inline">{t("newTask")}</span>
+            </Button>
           </div>
         </header>
-        <div className="animate-fade-in">{props.children}</div>
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">{children}</div>
       </main>
     </div>
   );

@@ -78,7 +78,7 @@ re-pix-local/
 │   │   ├── workflow/       # 五阶段流水线、取消/恢复
 │   │   ├── db/             # SQLite repository + migrations
 │   │   ├── providers/      # DeepSeek、Qwen-VL、Tongyi、Seedance
-│   │   ├── media/          # FFmpeg、whisper.cpp、ASS 字幕
+│   │   ├── media/          # FFmpeg、whisper.cpp、媒体处理
 │   │   └── storage/        # 本地素材
 │   └── tauri.conf.json
 ├── .github/workflows/      # CI（typecheck + cargo test）
@@ -113,11 +113,11 @@ RePixLocal/
 
 | # | 阶段 | 真实实现 | Provider / 工具 |
 |---|------|----------|-----------------|
-| 1 | Transcript Extraction | ✅ | FFmpeg 抽音频 + whisper.cpp；可选 DeepSeek 字幕校正 |
+| 1 | Transcript Extraction | ✅ | FFmpeg 抽音频 + whisper.cpp；DeepSeek 内部 ASR 转写清洗 |
 | 2 | Script Rewrite | ✅ | FFmpeg 抽关键帧 + Qwen-VL 分析 + DeepSeek 改写 |
 | 3 | Storyboard Generation | ✅ | 关键帧 Base64 内联 + Tongyi img2img |
 | 4 | Segment Generation | ✅ | 分镜图 Base64 内联 + Seedance 图生视频 |
-| 5 | Final Render | ✅ | FFmpeg 拼接片段 + 烧录 ASS 字幕 + 混入源音频 |
+| 5 | Final Render | ✅ | FFmpeg 拼接片段 + 混入 TTS 配音 |
 
 **Mock 模式**（设置 → Mock providers）：无需 API Key，五阶段使用本地占位数据，适合离线演示。
 
@@ -133,7 +133,7 @@ RePixLocal/
 
 | 卡片 | 用途 |
 |------|------|
-| **DeepSeek** | 字幕校正、脚本改写 |
+| **DeepSeek** | 内部 ASR 转写清洗、脚本改写 |
 | **DashScope（百炼）** | 一个 API Key + 三个模型：Qwen-VL 视觉分析、通义万相分镜、CosyVoice TTS |
 | **Seedance** | 视频片段生成（火山引擎 Ark，独立密钥） |
 

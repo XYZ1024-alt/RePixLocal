@@ -1483,7 +1483,7 @@ fn parse_asset_type(value: String) -> AssetType {
         "keyframe" => AssetType::Keyframe,
         "generated_frame" => AssetType::GeneratedFrame,
         "video_segment" => AssetType::VideoSegment,
-        "subtitle" => AssetType::Subtitle,
+        "transcript" | "subtitle" => AssetType::Transcript,
         "final_video" => AssetType::FinalVideo,
         _ => AssetType::SourceVideo,
     }
@@ -1556,7 +1556,7 @@ fn asset_type_text(asset_type: &AssetType) -> &'static str {
         AssetType::Keyframe => "keyframe",
         AssetType::GeneratedFrame => "generated_frame",
         AssetType::VideoSegment => "video_segment",
-        AssetType::Subtitle => "subtitle",
+        AssetType::Transcript => "transcript",
         AssetType::FinalVideo => "final_video",
     }
 }

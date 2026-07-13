@@ -43,14 +43,16 @@ impl CosyVoiceClient {
         } else {
             settings.model.clone()
         };
-        let voice = map_voice_id(voice_key, &model);
+        let voice = map_voice_id(voice_key, &model)?;
+        let text_characters = text_character_count(trimmed);
+        let language_hint = language_hint(language);
         let mut input = json!({
             "text": trimmed,
             "voice": voice,
             "format": "wav",
             "sample_rate": DEFAULT_SAMPLE_RATE,
         });
-        if let Some(language) = language_hint(language) {
+        if let Some(language) = language_hint {
             input["language_hints"] = json!([language]);
         }
         let payload = json!({
@@ -60,7 +62,7 @@ impl CosyVoiceClient {
         debug!(
             model = %model,
             voice = %voice,
-            text_characters = trimmed.chars().count(),
+            text_characters,
             "CosyVoice TTS request"
         );
         let url = cosyvoice_synthesizer_url(&settings.base_url);
@@ -77,7 +79,8 @@ impl CosyVoiceClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(AppError::Provider(format!(
-                "CosyVoice API error {status}: {body}"
+                "CosyVoice API error {status} (model {model}, voice option {voice_key}, voice {voice}, language {}, text characters {text_characters}): {body}",
+                language_hint.unwrap_or("auto")
             )));
         }
         let body: Value = response
@@ -95,28 +98,33 @@ impl CosyVoiceClient {
         }
         download_to_file(audio_url, out_path, DownloadKind::WavAudio).await?;
         Ok(CosyVoiceOutput {
-            characters: text_character_count(trimmed),
+            characters: text_characters,
         })
     }
 }
 
-pub fn map_voice_id(voice_key: &str, model: &str) -> &'static str {
-    let is_v3 = model.to_ascii_lowercase().contains("v3");
-    if is_v3 {
-        // Voices compatible with cosyvoice-v3-flash / cosyvoice-v3-plus.
-        // longxiaochun is the default voice used in the official DashScope SDK examples.
-        match voice_key {
-            "male-1" => "longshu_v3",
-            "narrator" => "loongbella_v3",
-            _ => "longxiaochun",
-        }
-    } else {
-        // Voices for cosyvoice-v1 and similar older models.
-        match voice_key {
-            "male-1" => "longanyang",
-            "narrator" => "longshu",
-            _ => "longwan",
-        }
+pub fn map_voice_id(voice_key: &str, model: &str) -> AppResult<&'static str> {
+    let model = model.trim().to_ascii_lowercase();
+    match (model.as_str(), voice_key) {
+        // V3 Plus currently supports only longanhuan and longanyang.
+        ("cosyvoice-v3-plus", "female-1") => Ok("longanhuan"),
+        ("cosyvoice-v3-plus", "male-1") => Ok("longanyang"),
+        ("cosyvoice-v3-plus", "narrator") => Err(AppError::Provider(
+            "CosyVoice model cosyvoice-v3-plus has no narrator voice; choose female or male, or use cosyvoice-v3-flash"
+                .into(),
+        )),
+        ("cosyvoice-v3-flash", "female-1") => Ok("longxiaochun_v3"),
+        ("cosyvoice-v3-flash", "male-1") => Ok("longshu_v3"),
+        ("cosyvoice-v3-flash", "narrator") => Ok("loongbella_v3"),
+        ("cosyvoice-v1", "female-1") => Ok("longwan"),
+        ("cosyvoice-v1", "male-1") => Ok("longshuo"),
+        ("cosyvoice-v1", "narrator") => Ok("longshu"),
+        ("cosyvoice-v3-plus" | "cosyvoice-v3-flash" | "cosyvoice-v1", _) => Err(
+            AppError::Provider(format!("unsupported CosyVoice voice option {voice_key:?}")),
+        ),
+        _ => Err(AppError::Provider(format!(
+            "unsupported CosyVoice model {model:?}"
+        ))),
     }
 }
 
@@ -148,17 +156,35 @@ mod tests {
     #[test]
     fn voice_mapping() {
         assert_eq!(
-            map_voice_id("female-1", "cosyvoice-v3-flash"),
-            "longxiaochun"
+            map_voice_id("female-1", "cosyvoice-v3-flash").unwrap(),
+            "longxiaochun_v3"
         );
-        assert_eq!(map_voice_id("male-1", "cosyvoice-v3-flash"), "longshu_v3");
         assert_eq!(
-            map_voice_id("narrator", "cosyvoice-v3-flash"),
+            map_voice_id("male-1", "cosyvoice-v3-flash").unwrap(),
+            "longshu_v3"
+        );
+        assert_eq!(
+            map_voice_id("narrator", "cosyvoice-v3-flash").unwrap(),
             "loongbella_v3"
         );
-        assert_eq!(map_voice_id("female-1", "cosyvoice-v1"), "longwan");
-        assert_eq!(map_voice_id("male-1", "cosyvoice-v1"), "longanyang");
-        assert_eq!(map_voice_id("narrator", "cosyvoice-v1"), "longshu");
+        assert_eq!(
+            map_voice_id("female-1", "cosyvoice-v3-plus").unwrap(),
+            "longanhuan"
+        );
+        assert_eq!(
+            map_voice_id("male-1", "cosyvoice-v3-plus").unwrap(),
+            "longanyang"
+        );
+        assert!(map_voice_id("narrator", "cosyvoice-v3-plus").is_err());
+        assert_eq!(map_voice_id("female-1", "cosyvoice-v1").unwrap(), "longwan");
+        assert_eq!(map_voice_id("male-1", "cosyvoice-v1").unwrap(), "longshuo");
+        assert_eq!(map_voice_id("narrator", "cosyvoice-v1").unwrap(), "longshu");
+    }
+
+    #[test]
+    fn voice_mapping_rejects_unknown_model_or_voice() {
+        assert!(map_voice_id("unknown", "cosyvoice-v3-plus").is_err());
+        assert!(map_voice_id("female-1", "cosyvoice-v2").is_err());
     }
 
     #[test]

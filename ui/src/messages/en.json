@@ -1,6 +1,10 @@
 {
   "nav": {
     "brand": "RePix",
+    "home": "Home",
+    "tasks": "Tasks",
+    "assets": "Assets",
+    "primaryNavigation": "Primary navigation",
     "dashboard": "Overview",
     "newTask": "New Task",
     "console": "Console",
@@ -16,7 +20,13 @@
   "shell": {
     "allSystemsOperational": "All Systems Operational",
     "attentionRequired": "Attention Required",
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "toggleSidebar": "Expand or collapse sidebar",
+    "checking": "Checking",
+    "ready": "Ready",
+    "newTask": "New Task",
+    "unexpectedError": "The action did not complete",
+    "technicalDetails": "Technical details"
   },
   "metadata": {
     "title": "RePix",
@@ -38,6 +48,8 @@
     "running": "Running",
     "completed": "Completed",
     "successRate": "Success Rate",
+    "needsAttention": "Needs Attention",
+    "needsAttentionNote": "Failed, paused, or draft tasks",
     "assetsReady": "{count} assets ready",
     "livePipelines": "Live pipelines",
     "completedRuns": "Completed runs",
@@ -79,7 +91,48 @@
       "not_configured": "Not configured",
       "error": "Error"
     },
-    "openConsole": "Open console"
+    "openConsole": "Open console",
+    "loading": "Loading home",
+    "task": "Task",
+    "stage": "Stage",
+    "progress": "Progress",
+    "state": "Status"
+  },
+  "tasks": {
+    "title": "Tasks",
+    "description": "Create, monitor, and deliver every video task",
+    "newTask": "New Task",
+    "searchLabel": "Search tasks",
+    "searchPlaceholder": "Search by task title",
+    "filterLabel": "Filter task status",
+    "filters": { "all": "All", "running": "Running", "attention": "Needs attention", "completed": "Completed" },
+    "empty": "No tasks yet. Create your first task to track it here.",
+    "emptyFiltered": "No tasks match the current filters.",
+    "loadError": "Unable to load tasks.",
+    "refreshError": "Refresh failed. Showing data from {time}: {message}",
+    "retry": "Retry",
+    "never": "Never updated",
+    "notStarted": "Not started",
+    "openTask": "Open task {title}",
+    "backToTasks": "Back to tasks",
+    "detailTitle": "Task details",
+    "taskUnavailable": "This task could not be found or is no longer available.",
+    "noRunsYet": "No runs yet",
+    "errorDetails": "Error details",
+    "actionFailed": "Action failed",
+    "refreshFailed": "Data refresh failed",
+    "lastUpdated": "Last updated: {time}",
+    "progressLabel": "Overall progress {value}%",
+    "start": "Start run",
+    "resume": "Resume run",
+    "cancel": "Cancel run",
+    "cancelDialog": { "title": "Cancel this run?", "description": "Completed stage outputs are kept so the task can resume from its checkpoint later.", "keepRunning": "Keep running", "confirm": "Cancel run" },
+    "draft": { "title": "Task created, not started", "source": "Source", "type": "Type", "assets": "Existing assets", "description": "Start the task to see stage progress, logs, and outputs here." },
+    "taskTypes": { "replicate": "Video replication", "image_to_video": "Image to video" },
+    "unknown": "Unknown",
+    "table": { "caption": "Task list", "task": "Task", "status": "Status", "stage": "Current stage", "runs": "Runs", "updated": "Updated", "actions": "Actions" },
+    "statuses": { "DRAFT": "Draft", "PENDING": "Pending", "RUNNING": "Running", "COMPLETED": "Completed", "FAILED": "Failed", "PAUSED": "Paused", "CANCELLED": "Cancelled", "CANCELED": "Canceled" },
+    "stages": { "TRANSCRIPT_EXTRACTION": "Transcript & audio", "SCRIPT_REWRITE": "Keyframe analysis & rewrite", "SCRIPT_PLANNING": "Image analysis & planning", "STORYBOARD_GENERATION": "Storyboard generation", "TTS_SYNTHESIS": "Voice synthesis", "SEGMENT_GENERATION": "Video segment generation", "FINAL_RENDER": "Final render" }
   },
   "console": {
     "loadError": "Unable to load pipeline runs.",
@@ -93,7 +146,7 @@
     "backToList": "Back to list",
     "cancelRun": "Cancel run",
     "resumeRun": "Resume run",
-    "stages": "Stages",
+    "stagesTitle": "Stages",
     "liveLog": "Real-time Logs",
     "assetsTitle": "Task Assets",
     "finalOutputTitle": "Final output",
@@ -111,10 +164,22 @@
     "streaming": "streaming",
     "idle": "idle",
     "disconnected": "disconnected",
+    "detailTabs": { "label": "Task detail views", "overview": "Overview", "assets": "Assets", "runs": "Run history", "logsAndCosts": "Logs & costs" },
+    "runHistory": { "caption": "Run history", "run": "Run", "status": "Status", "stage": "Stage", "created": "Created" },
+    "statuses": { "PENDING": "Pending", "RUNNING": "Running", "COMPLETED": "Completed", "FAILED": "Failed", "PAUSED": "Paused", "CANCELLED": "Cancelled", "CANCELED": "Canceled" },
+    "stages": { "TRANSCRIPT_EXTRACTION": "Transcript & audio", "SCRIPT_REWRITE": "Keyframe analysis & rewrite", "SCRIPT_PLANNING": "Image analysis & planning", "STORYBOARD_GENERATION": "Storyboard generation", "TTS_SYNTHESIS": "Voice synthesis", "SEGMENT_GENERATION": "Video segment generation", "FINAL_RENDER": "Final render" },
+    "progressLabel": "Task progress {value}%",
+    "refreshWarning": "Refresh failed. Showing data from {time}: {message}",
+    "finalOutputUnavailable": "The final output is unavailable.",
+    "finalOutputPending": "The final video will appear here when the task completes.",
+    "assetStatuses": { "READY": "Ready", "GENERATING": "Generating", "FAILED": "Failed", "PENDING": "Pending" },
     "stageStatus": {
+      "pending": "pending",
       "running": "in progress",
+      "completed": "completed",
       "done": "completed",
       "failed": "failed",
+      "cancelled": "cancelled",
       "queued": "queued"
     }
   },
@@ -124,6 +189,11 @@
     "title": "Media and Asset Library",
     "description": "Generated frames, segments, audio and final renders",
     "upload": "Upload",
+    "newTask": "New Task",
+    "search": "Search assets",
+    "searchPlaceholder": "Search tasks or file names",
+    "taskFilter": "Filter by task",
+    "allTasks": "All tasks",
     "empty": "No assets yet. Submit a task from the Wizard to generate some.",
     "signingError": "Asset preview signing failed",
     "sceneLabel": "Scene {index}",
@@ -137,7 +207,8 @@
     }
   },
   "assets": {
-    "viewAll": "View All ({count})",
+    "viewAll": "{count} items",
+    "openInFolder": "Open in folder",
     "sections": {
       "final": "Final output",
       "images": "Images (Storyboard Frames)",
@@ -152,7 +223,6 @@
       "REWRITTEN_SCRIPT": "Rewritten Script",
       "STORYBOARD_FRAME": "Storyboard Frame",
       "VIDEO_SEGMENT": "Video Segment",
-      "SUBTITLE": "Subtitle",
       "FINAL_VIDEO": "Final Video"
     }
   },
@@ -188,7 +258,6 @@
     "sceneCount": "Scene count",
     "sourceSubtitleTreatment": "Source subtitle treatment",
     "sourceSubtitleRegionRatio": "Source subtitle band height (%)",
-    "subtitlePosition": "Subtitle position",
     "unsupportedType": "Unsupported file type - use MP4 or MOV.",
     "tooLarge": "File exceeds the 500MB limit.",
     "selectFirst": "Select a source video first.",
@@ -199,8 +268,31 @@
     "done": "Done - redirecting...",
     "createRun": "Create & Run",
     "cancel": "Cancel",
+    "back": "Back",
+    "continue": "Continue",
+    "sourceStepTitle": "Choose a task source",
+    "configureStepTitle": "Configure output",
+    "reviewStepTitle": "Review and run",
+    "chooseVideo": "Choose local video",
+    "advancedOptions": "Advanced options",
+    "source": "Source",
+    "imageCount": "{count} images",
+    "removeImage": "Remove scene {index}",
+    "readinessAttention": "Runtime needs attention",
+    "readinessIssues": "{count} configuration items need attention. You can fix them in Settings.",
+    "openSettings": "Open Settings",
+    "submitFailed": "Task submission failed",
+    "technicalDetails": "Technical details",
+    "leaveDraftTitle": "Leave the new task?",
+    "leaveDraftDescription": "Keep this configuration for the current app session, or discard it now.",
+    "stay": "Keep editing",
+    "discardDraft": "Discard draft",
+    "keepDraft": "Keep and leave",
     "steps": {
+      "label": "New task steps",
       "source": "Source",
+      "configure": "Configure",
+      "review": "Review",
       "options": "Options",
       "upload": "Upload",
       "submit": "Submit",
@@ -244,11 +336,6 @@
         "blur": "Blur and soften",
         "none": "Do not process"
       },
-      "subtitlePosition": {
-        "bottom": "Bottom",
-        "center": "Center",
-        "top": "Top"
-      },
       "taskType": {
         "replicate": "Video replication",
         "image_to_video": "Image to video"
@@ -286,6 +373,7 @@
     "FAILED": "FAILED",
     "PAUSED": "PAUSED",
     "CANCELLED": "CANCELLED",
+    "CANCELED": "CANCELED",
     "GENERATING": "GENERATING",
     "READY": "READY",
     "SKIPPED": "SKIPPED",
@@ -318,6 +406,11 @@
     "keyDecryptFailedBadge": "Re-enter Key",
     "savedSuccessfully": "Saved successfully",
     "failedToSave": "Failed to save",
+    "errorDetails": "Error details",
+    "revealApiKey": "Show API key",
+    "hideApiKey": "Hide API key",
+    "ready": "Ready",
+    "failed": "Failed",
     "failedToSaveKey": "Failed to save key, please check if the key is valid",
     "failedToFetchModels": "Failed to fetch models, please check your key and network",
     "noModelsAvailable": "No models available",
@@ -325,7 +418,7 @@
     "currentlySaved": "Currently saved: {maskedKey}",
     "keyChangedWarning": "Key has been modified, please click 'Fetch Available Models' to refresh the model list",
     "fetchModelsFirst": "Please click 'Fetch Available Models' to verify your key and select a model",
-    "fetchModelsToSelect": "Please click 'Fetch Available Models' first",
+    "fetchModelsToSelect": "Fetch models to select",
     "mustFetchModels": "Please fetch the model list first, then select a model from the list",
     "advancedOptions": "Advanced Options",
     "dashscope": {
@@ -381,6 +474,33 @@
     "fetchingModels": "Loading...",
     "selectModel": "Select a model",
     "useCustomModel": "Enter custom model name",
-    "useProviderModels": "Use provider model list"
+    "useProviderModels": "Use provider model list",
+    "tabs": {
+      "aiServices": "AI Services",
+      "localRuntime": "Local Runtime",
+      "appearance": "Appearance & Language"
+    },
+    "readiness": {
+      "title": "App readiness",
+      "ready": "Ready to create tasks",
+      "attention": "Configuration needs attention",
+      "mockDescription": "Mock providers are enabled, so AI service keys are optional.",
+      "realDescription": "Real services are enabled. Configure local tools and AI providers before running.",
+      "localRuntime": "Local runtime",
+      "aiServices": "AI services",
+      "readyCount": "{count}/{total} ready",
+      "downloading": "Whisper model is downloading",
+      "failed": "Model check failed"
+    },
+    "appearance": {
+      "title": "Appearance & language",
+      "description": "Choose the app theme and interface language.",
+      "theme": "Theme",
+      "resolvedTheme": "Currently using the {theme} theme",
+      "themeOptions": { "system": "System", "light": "Light", "dark": "Dark" },
+      "language": "Interface language",
+      "languageDescription": "Changes apply across the app immediately.",
+      "languageOptions": { "zh": "中文", "en": "English" }
+    }
   }
 }

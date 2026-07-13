@@ -20,6 +20,17 @@ const PNG_MAX_BYTES: u64 = 20 * MEBIBYTE;
 const WAV_MAX_BYTES: u64 = 100 * MEBIBYTE;
 const MP4_MAX_BYTES: u64 = 500 * MEBIBYTE;
 const ERROR_BODY_MAX_BYTES: usize = 8 * 1024;
+const BENCHMARK_IPV4_NETWORK: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 0);
+const BENCHMARK_IPV4_PREFIX: u8 = 15;
+const MIHOMO_FAKE_IPV4_PREFIX: u8 = 16;
+const HTTPS_PORT: u16 = 443;
+
+// Clash/Mihomo defaults to 198.18.0.0/16 for synthetic DNS answers.
+const ARK_CONTENT_GENERATION_BJ_TOS_HOST: &str =
+    "ark-content-generation-cn-beijing.tos-cn-beijing.volces.com";
+const DASHSCOPE_OSS_BUCKET_PREFIX: &str = "dashscope-";
+const DASHSCOPE_RESULT_BJ_OSS_HOST: &str = "dashscope-result-bj.oss-cn-beijing.aliyuncs.com";
+const OSS_ACCELERATE_HOST_SUFFIX: &str = ".oss-accelerate.aliyuncs.com";
 
 const PNG_CONTENT_TYPES: &[&str] = &["image/png"];
 const WAV_CONTENT_TYPES: &[&str] = &["audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"];
@@ -36,7 +47,7 @@ const BLOCKED_IPV4_RANGES: &[(Ipv4Addr, u8)] = &[
     (Ipv4Addr::new(192, 0, 2, 0), 24),
     (Ipv4Addr::new(192, 88, 99, 0), 24),
     (Ipv4Addr::new(192, 168, 0, 0), 16),
-    (Ipv4Addr::new(198, 18, 0, 0), 15),
+    (BENCHMARK_IPV4_NETWORK, BENCHMARK_IPV4_PREFIX),
     (Ipv4Addr::new(198, 51, 100, 0), 24),
     (Ipv4Addr::new(203, 0, 113, 0), 24),
     (Ipv4Addr::new(224, 0, 0, 0), 4),
@@ -46,6 +57,7 @@ const BLOCKED_IPV4_RANGES: &[(Ipv4Addr, u8)] = &[
 struct ResolvedTarget {
     host: String,
     addresses: Vec<SocketAddr>,
+    allow_proxy_fake_ip: bool,
 }
 
 struct PinnedResolver {
@@ -185,6 +197,19 @@ async fn request_url(url: &Url) -> AppResult<Response> {
 fn parse_download_url(raw: &str) -> AppResult<Url> {
     let url = Url::parse(raw)
         .map_err(|error| AppError::Provider(format!("invalid download URL: {error}")))?;
+    normalize_download_url(url)
+}
+
+fn normalize_download_url(mut url: Url) -> AppResult<Url> {
+    if url.scheme() == "http"
+        && url.port_or_known_default() == Some(80)
+        && url.host_str().is_some_and(is_dashscope_result_bj_oss_host)
+    {
+        url.set_scheme("https")
+            .map_err(|_| AppError::Provider("failed to secure DashScope result URL".into()))?;
+        url.set_port(None)
+            .map_err(|_| AppError::Provider("failed to secure DashScope result URL".into()))?;
+    }
     validate_download_url(&url)?;
     Ok(url)
 }
@@ -233,17 +258,29 @@ async fn resolve_public_target(url: &Url) -> AppResult<ResolvedTarget> {
         })?
         .collect(),
     };
-    validate_resolved_addresses(&host, &addresses)?;
-    Ok(ResolvedTarget { host, addresses })
+    let allow_proxy_fake_ip = allows_proxy_fake_ip(url, &host);
+    validate_resolved_addresses(&host, &addresses, allow_proxy_fake_ip)?;
+    Ok(ResolvedTarget {
+        host,
+        addresses,
+        allow_proxy_fake_ip,
+    })
 }
 
-fn validate_resolved_addresses(host: &str, addresses: &[SocketAddr]) -> AppResult<()> {
+fn validate_resolved_addresses(
+    host: &str,
+    addresses: &[SocketAddr],
+    allow_proxy_fake_ip: bool,
+) -> AppResult<()> {
     if addresses.is_empty() {
         return Err(AppError::Provider(format!(
             "download host {host} resolved to no addresses"
         )));
     }
-    if let Some(address) = addresses.iter().find(|address| !is_public_ip(address.ip())) {
+    if let Some(address) = addresses
+        .iter()
+        .find(|address| !is_allowed_target_ip(address.ip(), allow_proxy_fake_ip))
+    {
         return Err(AppError::Provider(format!(
             "download host {host} resolved to non-public address {}",
             address.ip()
@@ -281,7 +318,7 @@ fn validate_remote_address(response: &Response, target: &ResolvedTarget) -> AppR
         .addresses
         .iter()
         .any(|address| normalize_ip(address.ip()) == remote_ip);
-    if !is_public_ip(remote_ip) || !matches_resolved {
+    if !is_allowed_target_ip(remote_ip, target.allow_proxy_fake_ip) || !matches_resolved {
         return Err(AppError::Provider(format!(
             "download connected to unverified remote address {remote_ip}"
         )));
@@ -303,8 +340,7 @@ fn join_redirect_url(current: &Url, location: &str) -> AppResult<Url> {
     let url = current
         .join(location)
         .map_err(|error| AppError::Provider(format!("invalid download redirect: {error}")))?;
-    validate_download_url(&url)?;
-    Ok(url)
+    normalize_download_url(url)
 }
 
 fn is_followed_redirect(status: StatusCode) -> bool {
@@ -359,6 +395,49 @@ fn is_public_ip(ip: IpAddr) -> bool {
             .any(|(network, prefix)| ipv4_in_prefix(ip, *network, *prefix)),
         IpAddr::V6(ip) => is_public_ipv6(ip),
     }
+}
+
+fn is_allowed_target_ip(ip: IpAddr, allow_proxy_fake_ip: bool) -> bool {
+    is_public_ip(ip) || (allow_proxy_fake_ip && is_proxy_fake_ip(ip))
+}
+
+fn is_proxy_fake_ip(ip: IpAddr) -> bool {
+    matches!(
+        normalize_ip(ip),
+        IpAddr::V4(ip)
+            if ipv4_in_prefix(ip, BENCHMARK_IPV4_NETWORK, MIHOMO_FAKE_IPV4_PREFIX)
+    )
+}
+
+fn allows_proxy_fake_ip(url: &Url, host: &str) -> bool {
+    url.scheme() == "https"
+        && url.port_or_known_default() == Some(HTTPS_PORT)
+        && is_trusted_provider_download_host(host)
+}
+
+fn is_trusted_provider_download_host(host: &str) -> bool {
+    is_trusted_dashscope_oss_host(host) || is_ark_content_generation_bj_tos_host(host)
+}
+
+fn is_trusted_dashscope_oss_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if is_dashscope_result_bj_oss_host(&host) {
+        return true;
+    }
+    host.strip_suffix(OSS_ACCELERATE_HOST_SUFFIX)
+        .is_some_and(|bucket| {
+            bucket.starts_with(DASHSCOPE_OSS_BUCKET_PREFIX) && !bucket.contains('.')
+        })
+}
+
+fn is_dashscope_result_bj_oss_host(host: &str) -> bool {
+    host.trim_end_matches('.')
+        .eq_ignore_ascii_case(DASHSCOPE_RESULT_BJ_OSS_HOST)
+}
+
+fn is_ark_content_generation_bj_tos_host(host: &str) -> bool {
+    host.trim_end_matches('.')
+        .eq_ignore_ascii_case(ARK_CONTENT_GENERATION_BJ_TOS_HOST)
 }
 
 fn normalize_ip(ip: IpAddr) -> IpAddr {
@@ -690,6 +769,114 @@ mod tests {
             let ip = raw.parse().unwrap();
             assert!(is_public_ip(ip), "address should be public: {raw}");
         }
+    }
+
+    #[test]
+    fn allows_proxy_fake_ip_only_for_trusted_https_download_hosts() {
+        for raw in [
+            "https://dashscope-7c2c.oss-accelerate.aliyuncs.com/asset.wav",
+            "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/asset.wav",
+            "https://ark-content-generation-cn-beijing.tos-cn-beijing.volces.com/asset.mp4",
+        ] {
+            let url = parse_download_url(raw).unwrap();
+            assert!(
+                allows_proxy_fake_ip(&url, url.host_str().unwrap()),
+                "fake IP should be allowed for {raw}"
+            );
+        }
+
+        for raw in [
+            "http://dashscope-7c2c.oss-accelerate.aliyuncs.com/asset.wav",
+            "https://dashscope-7c2c.oss-accelerate.aliyuncs.com:444/asset.wav",
+            "https://other-bucket.oss-accelerate.aliyuncs.com/asset.wav",
+            "https://nested.dashscope-7c2c.oss-accelerate.aliyuncs.com/asset.wav",
+            "https://oss-accelerate.aliyuncs.com.example.com/asset.wav",
+            "http://dashscope-result-bj.oss-cn-beijing.aliyuncs.com:8080/asset.wav",
+            "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com:444/asset.wav",
+            "https://other-bucket.oss-cn-beijing.aliyuncs.com/asset.wav",
+            "https://dashscope-result-bj.oss-cn-shanghai.aliyuncs.com/asset.wav",
+            "https://nested.dashscope-result-bj.oss-cn-beijing.aliyuncs.com/asset.wav",
+            "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com.example.com/asset.wav",
+            "http://ark-content-generation-cn-beijing.tos-cn-beijing.volces.com/asset.mp4",
+            "https://ark-content-generation-cn-beijing.tos-cn-beijing.volces.com:444/asset.mp4",
+            "https://other-bucket.tos-cn-beijing.volces.com/asset.mp4",
+            "https://ark-content-generation-cn-shanghai.tos-cn-shanghai.volces.com/asset.mp4",
+            "https://nested.ark-content-generation-cn-beijing.tos-cn-beijing.volces.com/asset.mp4",
+            "https://ark-content-generation-cn-beijing.tos-cn-beijing.volces.com.example.com/asset.mp4",
+            "https://aliyuncs.com/asset.wav",
+            "https://198.18.1.242/asset.wav",
+            "https://example.com/asset.wav",
+        ] {
+            let url = parse_download_url(raw).unwrap();
+            assert!(
+                !allows_proxy_fake_ip(&url, url.host_str().unwrap()),
+                "fake IP should not be allowed for {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn upgrades_documented_dashscope_result_url_to_https() {
+        let raw = concat!(
+            "http://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/",
+            "pre/cosyvoice-v3-flash/asset.wav?Expires=123&Signature=test"
+        );
+        let url = parse_download_url(raw).unwrap();
+
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.port_or_known_default(), Some(HTTPS_PORT));
+        assert_eq!(url.path(), "/pre/cosyvoice-v3-flash/asset.wav");
+        assert_eq!(url.query(), Some("Expires=123&Signature=test"));
+        assert!(allows_proxy_fake_ip(&url, url.host_str().unwrap()));
+
+        let explicit_port = raw.replacen(
+            "dashscope-result-bj.oss-cn-beijing.aliyuncs.com",
+            "dashscope-result-bj.oss-cn-beijing.aliyuncs.com:80",
+            1,
+        );
+        assert_eq!(parse_download_url(&explicit_port).unwrap(), url);
+
+        let current = parse_download_url("https://example.com/asset").unwrap();
+        let redirected = join_redirect_url(&current, raw).unwrap();
+        assert_eq!(redirected, url);
+    }
+
+    #[test]
+    fn trusted_fake_ip_does_not_allow_other_private_addresses() {
+        let fake_ip = "198.18.1.242:443".parse().unwrap();
+        let ark_fake_ip = "198.18.2.160:443".parse().unwrap();
+        let other_benchmark_ip = "198.19.1.242:443".parse().unwrap();
+        let loopback = "127.0.0.1:443".parse().unwrap();
+
+        assert!(validate_resolved_addresses("example.com", &[fake_ip], false).is_err());
+        assert!(validate_resolved_addresses(
+            "dashscope-7c2c.oss-accelerate.aliyuncs.com",
+            &[fake_ip],
+            true
+        )
+        .is_ok());
+        let ark_url = parse_download_url(
+            "https://ark-content-generation-cn-beijing.tos-cn-beijing.volces.com/asset.mp4",
+        )
+        .unwrap();
+        assert!(validate_resolved_addresses(
+            ark_url.host_str().unwrap(),
+            &[ark_fake_ip],
+            allows_proxy_fake_ip(&ark_url, ark_url.host_str().unwrap())
+        )
+        .is_ok());
+        assert!(validate_resolved_addresses(
+            "dashscope-7c2c.oss-accelerate.aliyuncs.com",
+            &[other_benchmark_ip],
+            true
+        )
+        .is_err());
+        assert!(validate_resolved_addresses(
+            "dashscope-7c2c.oss-accelerate.aliyuncs.com",
+            &[fake_ip, loopback],
+            true
+        )
+        .is_err());
     }
 
     #[tokio::test]

@@ -1,27 +1,49 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   AlertTriangle,
   CheckCircle2,
   Circle,
   Loader2,
-  XCircle
+  RefreshCw,
+  XCircle,
 } from "lucide-react";
-import { getRun, getRunCosts, listAssets, revealAsset } from "@/api";
 import { AssetSections } from "@/components/AssetSections";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useLocale, useTranslations } from "@/i18n/context";
-import { toLibraryAssets } from "@/lib/library";
+import { toLibraryAssets, type LibraryAsset } from "@/lib/library";
 import { cn } from "@/lib/utils";
-import type { CostSummary, PipelineEvent } from "@/types";
-import type { LibraryAsset } from "@/lib/library";
+import { useServices } from "@/services/context";
+import type {
+  Asset,
+  CostSummary,
+  PipelineEvent,
+  RunDetail,
+  RunListItem,
+} from "@/types";
 
-type StageStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
-type RunStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
-
-export type StageSnapshot = { type: string; label: string; status: StageStatus };
+export type StageStatus =
+  | "PENDING"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
+export type RunStatus =
+  | "PENDING"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
+export type StageSnapshot = {
+  type: string;
+  label: string;
+  status: StageStatus;
+};
 export type LogSnapshot = { ts: string; level: string; message: string };
 
 type ConsoleLiveProps = {
@@ -33,524 +55,400 @@ type ConsoleLiveProps = {
   initialStatus: RunStatus;
   initialAssets: LibraryAsset[];
   initialCostSummary: CostSummary;
+  runs: RunListItem[];
   assetTitle: string;
   assetEmptyText: string;
   assetSigningErrorLabel: string;
   statusLabels: Record<string, string>;
+  onRunSelected?: (runId: string) => void;
+  onStatusChange?: (status: RunStatus) => void;
+  onRunUpdate?: (detail: RunDetail) => void;
 };
 
-const ASSET_REFRESH_STAGE_STATUSES = new Set<StageStatus>(["COMPLETED", "FAILED"]);
-const ASSET_REFRESH_RUN_STATUSES = new Set<RunStatus>(["COMPLETED", "FAILED", "CANCELLED"]);
-const ACTIVE_RUN_STATUSES = new Set<RunStatus>(["RUNNING", "PENDING"]);
+type LiveState = {
+  stages: StageSnapshot[];
+  logs: LogSnapshot[];
+  status: RunStatus;
+  assets: LibraryAsset[];
+  costs: CostSummary;
+  refreshError: string | null;
+  lastUpdated: Date;
+  connected: boolean;
+};
+
+const ACTIVE_STATUSES = new Set<RunStatus>(["PENDING", "RUNNING"]);
 const POLL_INTERVAL_MS = 3000;
 
-const stageIcon = {
-  COMPLETED: CheckCircle2,
-  RUNNING: Loader2,
-  PENDING: Circle,
-  FAILED: XCircle,
-  CANCELLED: XCircle
-} as const;
-
-const stageColor = {
-  COMPLETED: "text-white",
-  RUNNING: "text-cyan-300",
-  PENDING: "text-zinc-400",
-  FAILED: "text-red-200",
-  CANCELLED: "text-red-200"
-} as const;
-
-const stageBarColor: Record<StageStatus, string> = {
-  COMPLETED: "bg-white",
-  RUNNING: "bg-cyan-400 animate-pulse",
-  PENDING: "bg-zinc-500",
-  FAILED: "bg-red-400",
-  CANCELLED: "bg-red-400"
-};
-
-const logColor: Record<string, string> = {
-  INFO: "text-zinc-300",
-  WARN: "text-zinc-300",
-  ERROR: "text-red-200",
-  DEBUG: "text-zinc-400"
-};
-
-const logBg: Record<string, string> = {
-  INFO: "bg-zinc-800",
-  WARN: "bg-zinc-800",
-  ERROR: "bg-red-950/40",
-  DEBUG: "bg-zinc-900"
-};
-
-const runBadge: Record<RunStatus, "default" | "success" | "warning" | "destructive" | "secondary"> = {
-  COMPLETED: "success",
-  RUNNING: "default",
-  FAILED: "destructive",
-  CANCELLED: "destructive",
-  PENDING: "secondary"
-};
-
 export function ConsoleLive(props: ConsoleLiveProps) {
-  const live = useConsoleLiveData(props);
-
+  const live = useLiveRun(props);
+  const t = useTranslations("console");
   return (
-    <div className="flex flex-1 flex-col gap-5 px-4 pb-6 pt-3 lg:px-6 animate-fade-in">
-      <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
-        <StageTimeline status={live.status} stages={live.stages} />
-        <LogPanel connected={live.connected} logs={live.logs} status={live.status} />
-      </div>
-      <CostPanel summary={live.costSummary} error={live.costError} />
-      <FinalOutputPanel status={live.status} assets={live.assets} />
-      <TaskAssets
-        title={props.assetTitle}
-        assets={live.assets}
-        emptyText={props.assetEmptyText}
-        signingError={live.assetError}
-        signingErrorLabel={props.assetSigningErrorLabel}
-        statusLabels={props.statusLabels}
-      />
+    <div className="flex flex-col gap-4 px-4 pb-6 pt-3 lg:px-6">
+      {live.refreshError ? (
+        <RefreshWarning
+          error={live.refreshError}
+          lastUpdated={live.lastUpdated}
+          onRetry={live.refresh}
+        />
+      ) : null}
+      <Tabs defaultValue="overview">
+        <TabsList
+          aria-label={t("detailTabs.label")}
+          className="w-full justify-start overflow-x-auto"
+        >
+          <TabsTrigger value="overview">{t("detailTabs.overview")}</TabsTrigger>
+          <TabsTrigger value="assets">{t("detailTabs.assets")}</TabsTrigger>
+          <TabsTrigger value="runs">{t("detailTabs.runs")}</TabsTrigger>
+          <TabsTrigger value="logs">{t("detailTabs.logsAndCosts")}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="overview">
+          <OverviewTab live={live} />
+        </TabsContent>
+        <TabsContent value="assets">
+          <AssetsTab live={live} props={props} />
+        </TabsContent>
+        <TabsContent value="runs">
+          <RunHistory
+            runs={props.runs}
+            selectedRunId={props.runId}
+            onSelect={props.onRunSelected}
+          />
+        </TabsContent>
+        <TabsContent value="logs">
+          <LogsAndCosts live={live} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
 
-function useConsoleLiveData({
-  runId,
-  taskId,
-  taskTitle,
-  initialStages,
-  initialLogs,
-  initialStatus,
-  initialAssets,
-  initialCostSummary
-}: ConsoleLiveProps) {
-  const { locale } = useLocale();
-  const [stages, setStages] = useState(initialStages);
-  const [logs, setLogs] = useState(initialLogs);
-  const [status, setStatus] = useState<RunStatus>(initialStatus);
-  const [assets, setAssets] = useState(initialAssets);
-  const [costSummary, setCostSummary] = useState(initialCostSummary);
-  const [assetError, setAssetError] = useState<string | null>(null);
-  const [costError, setCostError] = useState<string | null>(null);
-  const [connected, setConnected] = useState(false);
-  const latestAssetRequest = useRef(0);
-  const latestCostRequest = useRef(0);
-  const latestSnapshotRequest = useRef(0);
+function useLiveRun(props: ConsoleLiveProps) {
+  const { getRun, getRunCosts, listAssets } = useServices();
+  const [state, setState] = useState<LiveState>(() =>
+    createInitialState(props),
+  );
+  const requestId = useRef(0);
+  const activeRunId = useRef(props.runId);
 
   useEffect(() => {
-    setStages(initialStages);
-    setLogs(initialLogs);
-    setStatus(initialStatus);
-    setAssets(initialAssets);
-    setCostSummary(initialCostSummary);
-    setAssetError(null);
-    setCostError(null);
-  }, [runId, initialStages, initialLogs, initialStatus, initialAssets, initialCostSummary]);
+    activeRunId.current = props.runId;
+    requestId.current += 1;
+    setState(createInitialState(props));
+  }, [props.runId]);
 
+  const refresh = useCallback(async () => {
+    const currentRequest = ++requestId.current;
+    const results = await Promise.allSettled([
+      getRun(props.runId),
+      listAssets(props.taskId),
+      getRunCosts(props.runId),
+    ]);
+    if (
+      currentRequest !== requestId.current ||
+      activeRunId.current !== props.runId
+    )
+      return;
+    setState((current) => applyRefreshResults(current, results, props));
+    const runResult = results[0];
+    if (runResult.status === "fulfilled" && runResult.value)
+      props.onRunUpdate?.(runResult.value);
+  }, [
+    getRun,
+    getRunCosts,
+    listAssets,
+    props.onRunUpdate,
+    props.runId,
+    props.taskId,
+    props.taskTitle,
+  ]);
+
+  useRunPolling(state.status, refresh);
+  useRunEvents(props.runId, refresh, setState);
+
+  useEffect(
+    () => props.onStatusChange?.(state.status),
+    [props.onStatusChange, state.status],
+  );
+  return { ...state, refresh };
+}
+
+function useRunPolling(status: RunStatus, refresh: () => Promise<void>) {
+  useEffect(() => {
+    if (!ACTIVE_STATUSES.has(status)) return;
+    const timerId = window.setInterval(() => void refresh(), POLL_INTERVAL_MS);
+    return () => window.clearInterval(timerId);
+  }, [refresh, status]);
+}
+
+function useRunEvents(
+  runId: string,
+  refresh: () => Promise<void>,
+  setState: React.Dispatch<React.SetStateAction<LiveState>>,
+) {
+  const { locale } = useLocale();
   useEffect(() => {
     let active = true;
-
-    const refreshAssets = createAssetRefresh(taskId, taskTitle, latestAssetRequest, {
-      isActive: () => active,
-      setAssets,
-      setAssetError
-    });
-    const refreshCosts = createCostRefresh(runId, latestCostRequest, {
-      isActive: () => active,
-      setCostSummary,
-      setCostError
-    });
-    const applyEvent = createEventHandler({
-      locale,
-      refreshAssets,
-      refreshCosts,
-      setLogs,
-      setStages,
-      setStatus
-    });
-
     let unlisten: (() => void) | undefined;
-
     void listen<PipelineEvent>("pipeline-event", (event) => {
-      const payload = event.payload;
-      if (payload.run_id !== runId) return;
-      applyEvent(payload);
+      if (event.payload.run_id !== runId) return;
+      setState((current) => applyPipelineEvent(current, event.payload, locale));
+      if (event.payload.event !== "log") void refresh();
     })
       .then((dispose) => {
-        if (!active) {
-          void dispose();
-          return;
-        }
+        if (!active) return void dispose();
         unlisten = dispose;
-        setConnected(true);
-        void refreshAssets();
-        void refreshCosts();
+        setState((current) => ({ ...current, connected: true }));
       })
-      .catch(() => setConnected(false));
-
-    return () => {
-      active = false;
-      unlisten?.();
-      setConnected(false);
-    };
-  }, [locale, runId, taskId, taskTitle]);
-
-  useEffect(() => {
-    if (!ASSET_REFRESH_RUN_STATUSES.has(status)) return;
-
-    let active = true;
-    void listAssets(taskId)
-      .then((rows) => {
-        if (!active) return;
-        setAssets(toLibraryAssets(rows, { [taskId]: taskTitle }));
-        setAssetError(null);
-      })
-      .catch((err) => {
-        if (!active) return;
-        setAssetError(formatError(err));
+      .catch((error) => {
+        if (active)
+          setState((current) => ({
+            ...current,
+            connected: false,
+            refreshError: formatError(error),
+          }));
       });
     return () => {
       active = false;
+      unlisten?.();
     };
-  }, [status, taskId, taskTitle]);
+  }, [locale, refresh, runId, setState]);
+}
 
-  useEffect(() => {
-    if (!ACTIVE_RUN_STATUSES.has(status)) return;
-
-    let active = true;
-    const refreshSnapshot = createSnapshotRefresh(runId, latestSnapshotRequest, {
-      isActive: () => active,
-      setStages,
-      setLogs,
-      setStatus
-    });
-
-    const id = window.setInterval(() => {
-      void refreshSnapshot();
-    }, POLL_INTERVAL_MS);
-
-    return () => {
-      active = false;
-      window.clearInterval(id);
-    };
-  }, [runId, status]);
-
+function createInitialState(props: ConsoleLiveProps): LiveState {
   return {
-    stages,
-    logs,
-    status,
-    connected,
-    assets,
-    assetError,
-    costSummary,
-    costError
+    stages: props.initialStages,
+    logs: props.initialLogs,
+    status: props.initialStatus,
+    assets: props.initialAssets,
+    costs: props.initialCostSummary,
+    refreshError: null,
+    lastUpdated: new Date(),
+    connected: false,
   };
 }
 
-function createAssetRefresh(
-  taskId: string,
-  taskTitle: string,
-  latestRequest: { current: number },
-  actions: {
-    isActive: () => boolean;
-    setAssets: (assets: LibraryAsset[]) => void;
-    setAssetError: (error: string | null) => void;
-  }
-) {
-  return async function refreshAssets() {
-    const requestId = latestRequest.current + 1;
-    latestRequest.current = requestId;
+type RefreshResults = [
+  PromiseSettledResult<RunDetail | null>,
+  PromiseSettledResult<Asset[]>,
+  PromiseSettledResult<CostSummary>,
+];
 
-    try {
-      const rows = await listAssets(taskId);
-      if (!shouldApplyRefresh(actions.isActive(), latestRequest.current, requestId)) return;
-      actions.setAssets(toLibraryAssets(rows, { [taskId]: taskTitle }));
-      actions.setAssetError(null);
-    } catch (err) {
-      if (!shouldApplyRefresh(actions.isActive(), latestRequest.current, requestId)) return;
-      actions.setAssetError(formatError(err));
-    }
-  };
-}
-
-function createCostRefresh(
-  runId: string,
-  latestRequest: { current: number },
-  actions: {
-    isActive: () => boolean;
-    setCostSummary: (summary: CostSummary) => void;
-    setCostError: (error: string | null) => void;
-  }
-) {
-  return async function refreshCosts() {
-    const requestId = latestRequest.current + 1;
-    latestRequest.current = requestId;
-
-    try {
-      const refreshed = await getRunCosts(runId);
-      if (!shouldApplyRefresh(actions.isActive(), latestRequest.current, requestId)) return;
-      actions.setCostSummary(refreshed);
-      actions.setCostError(null);
-    } catch (err) {
-      if (!shouldApplyRefresh(actions.isActive(), latestRequest.current, requestId)) return;
-      actions.setCostError(formatError(err));
-    }
-  };
-}
-
-function createSnapshotRefresh(
-  runId: string,
-  latestRequest: { current: number },
-  actions: {
-    isActive: () => boolean;
-    setStages: (update: (prev: StageSnapshot[]) => StageSnapshot[]) => void;
-    setLogs: (update: (prev: LogSnapshot[]) => LogSnapshot[]) => void;
-    setStatus: (status: RunStatus) => void;
-  }
-) {
-  return async function refreshSnapshot() {
-    const requestId = latestRequest.current + 1;
-    latestRequest.current = requestId;
-
-    try {
-      const detail = await getRun(runId);
-      if (!shouldApplyRefresh(actions.isActive(), latestRequest.current, requestId) || !detail) return;
-
-      actions.setStatus(detail.status as RunStatus);
-      actions.setStages((prev) =>
-        detail.stages.map((stage) => {
-          const existing = prev.find((entry) => entry.type === stage.stage_type);
-          return {
-            type: stage.stage_type,
-            label: existing?.label ?? stage.stage_type,
-            status: stage.status as StageStatus
-          };
-        })
-      );
-      actions.setLogs(() => detail.logs);
-    } catch {
-      // Polling fallback is best-effort.
-    }
-  };
-}
-
-function createEventHandler(options: {
-  locale: string;
-  refreshAssets: () => Promise<void>;
-  refreshCosts: () => Promise<void>;
-  setLogs: (update: (prev: LogSnapshot[]) => LogSnapshot[]) => void;
-  setStages: (update: (prev: StageSnapshot[]) => StageSnapshot[]) => void;
-  setStatus: (status: RunStatus) => void;
-}) {
-  return function applyEvent(event: PipelineEvent) {
-    if (event.event === "run") {
-      options.setStatus(event.status as RunStatus);
-      if (ASSET_REFRESH_RUN_STATUSES.has(event.status as RunStatus)) {
-        void options.refreshAssets();
-      }
-    }
-    if (event.event === "stage") {
-      options.setStages((prev) =>
-        prev.map((stage) =>
-          stage.type === event.stage ? { ...stage, status: event.status as StageStatus } : stage
-        )
-      );
-      if (ASSET_REFRESH_STAGE_STATUSES.has(event.status as StageStatus)) {
-        void options.refreshAssets();
-      }
-    }
-    if (event.event === "log") {
-      options.setLogs((prev) => [
-        ...prev,
-        {
-          ts: new Date().toLocaleTimeString(options.locale, { hour12: false }),
-          level: event.level,
-          message: event.message
-        }
-      ]);
-    }
-    void options.refreshCosts();
-  };
-}
-
-function shouldApplyRefresh(active: boolean, latestRequest: number, requestId: number) {
-  return active && latestRequest === requestId;
-}
-
-function formatError(err: unknown) {
-  return err instanceof Error ? err.message : String(err);
-}
-
-function CostPanel({ summary, error }: { summary: CostSummary; error: string | null }) {
-  const t = useTranslations("console");
-
-  return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between gap-3">
-        <CardTitle>{t("costsTitle")}</CardTitle>
-        <div className="flex items-center gap-2">
-          {summary.incomplete ? (
-            <Badge variant="warning">
-              <AlertTriangle className="size-3" />
-              {t("costIncomplete")}
-            </Badge>
-          ) : null}
-          <span className="text-lg font-semibold tabular-nums">{formatUsd(summary.total_cost_usd)}</span>
-        </div>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {error ? <p className="text-sm text-red-200">{error}</p> : null}
-        {summary.providers.length === 0 ? (
-          <p className="text-sm text-zinc-400">{t("noCosts")}</p>
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {summary.providers.map((row) => (
-              <ProviderCostRow
-                key={row.provider}
-                row={row}
-                total={summary.total_cost_usd}
-              />
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+function applyRefreshResults(
+  current: LiveState,
+  results: RefreshResults,
+  props: ConsoleLiveProps,
+): LiveState {
+  const [runResult, assetResult, costResult] = results;
+  const errors = results.flatMap((result) =>
+    result.status === "rejected" ? [formatError(result.reason)] : [],
   );
+  const detail = runResult.status === "fulfilled" ? runResult.value : null;
+  if (runResult.status === "fulfilled" && !runResult.value)
+    errors.push(`Run not found: ${props.runId}`);
+  return {
+    ...current,
+    stages: detail ? mapStages(detail, current.stages) : current.stages,
+    logs: detail?.logs ?? current.logs,
+    status: detail ? (detail.status as RunStatus) : current.status,
+    assets:
+      assetResult.status === "fulfilled"
+        ? toLibraryAssets(assetResult.value, {
+            [props.taskId]: props.taskTitle,
+          })
+        : current.assets,
+    costs: costResult.status === "fulfilled" ? costResult.value : current.costs,
+    refreshError: errors.length > 0 ? errors.join(" | ") : null,
+    lastUpdated: detail ? new Date() : current.lastUpdated,
+  };
 }
 
-function ProviderCostRow({
-  row,
-  total
-}: {
-  row: CostSummary["providers"][number];
-  total: number;
-}) {
-  const t = useTranslations("console");
-  const ratio = total > 0 ? Math.max(0, Math.min(1, row.cost_usd / total)) : 0;
+function applyPipelineEvent(
+  state: LiveState,
+  event: PipelineEvent,
+  locale: string,
+): LiveState {
+  if (event.event === "run")
+    return { ...state, status: event.status as RunStatus };
+  if (event.event === "stage") {
+    const stages = state.stages.map((stage) =>
+      stage.type === event.stage
+        ? { ...stage, status: event.status as StageStatus }
+        : stage,
+    );
+    return { ...state, stages };
+  }
+  const log = {
+    ts: new Date().toLocaleTimeString(locale, { hour12: false }),
+    level: event.level,
+    message: event.message,
+  };
+  return { ...state, logs: [...state.logs, log] };
+}
 
+function mapStages(detail: RunDetail, previous: StageSnapshot[]) {
+  return detail.stages.map((stage) => ({
+    type: stage.stage_type,
+    label:
+      previous.find((item) => item.type === stage.stage_type)?.label ??
+      stage.stage_type,
+    status: stage.status as StageStatus,
+  }));
+}
+
+function OverviewTab({ live }: { live: ReturnType<typeof useLiveRun> }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 transition-all duration-200 hover:border-cyan-500/40">
-      <div className="flex items-center justify-between gap-3">
-        <span className="truncate text-sm font-semibold">{row.provider}</span>
-        <span className="text-sm font-semibold tabular-nums">{formatUsd(row.cost_usd)}</span>
-      </div>
-      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-950">
-        <div
-          className="h-full rounded-full bg-cyan-400 transition-all duration-500"
-          style={{ width: `${ratio * 100}%` }}
-        />
-      </div>
-      <p className="mt-2 text-xs text-zinc-500">
-        {t("costUsageMeta", {
-          quantity: formatQuantity(row.quantity),
-          unit: row.unit,
-          calls: row.calls
-        })}
-      </p>
-      {row.unknown_cost_count > 0 ? (
-        <p className="mt-1 text-xs text-zinc-300">
-          {t("unknownCostCalls", { count: row.unknown_cost_count })}
-        </p>
-      ) : null}
-      {row.failed_calls > 0 ? (
-        <p className="mt-1 text-xs text-red-200">{t("failedCostCalls", { count: row.failed_calls })}</p>
-      ) : null}
+    <div className="grid gap-4 pt-2 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+      <StageTimeline status={live.status} stages={live.stages} />
+      <FinalOutputPanel status={live.status} assets={live.assets} />
     </div>
   );
 }
 
-function FinalOutputPanel({
-  status,
-  assets
+function AssetsTab({
+  live,
+  props,
 }: {
-  status: RunStatus;
-  assets: LibraryAsset[];
+  live: ReturnType<typeof useLiveRun>;
+  props: ConsoleLiveProps;
+}) {
+  return (
+    <div className="pt-2">
+      <AssetSections
+        assets={live.assets}
+        emptyText={props.assetEmptyText}
+        signingError={null}
+        signingErrorLabel={props.assetSigningErrorLabel}
+        statusLabels={props.statusLabels}
+        showTaskTitle={false}
+      />
+    </div>
+  );
+}
+
+function LogsAndCosts({ live }: { live: ReturnType<typeof useLiveRun> }) {
+  return (
+    <div className="grid gap-4 pt-2 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.7fr)]">
+      <LogPanel
+        connected={live.connected}
+        logs={live.logs}
+        status={live.status}
+      />
+      <CostPanel summary={live.costs} />
+    </div>
+  );
+}
+
+function RunHistory(props: {
+  runs: RunListItem[];
+  selectedRunId: string;
+  onSelect?: (runId: string) => void;
 }) {
   const t = useTranslations("console");
-  const finalAsset = assets.find((asset) => asset.type === "FINAL_VIDEO");
-
-  if (status !== "COMPLETED" || !finalAsset) return null;
-
+  const { locale } = useLocale();
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between gap-3">
-        <CardTitle>{t("finalOutputTitle")}</CardTitle>
-        <Button
-          onClick={() => void revealAsset(finalAsset.storageKey)}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
-          {t("openInFolder")}
-        </Button>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <p className="text-sm text-zinc-400">{t("finalOutputHint")}</p>
-        {finalAsset.url ? (
-          <video
-            src={finalAsset.url}
-            controls
-            className="aspect-video w-full rounded-lg bg-black object-contain shadow-card"
-          />
-        ) : (
-          <p className="text-sm text-zinc-300">{finalAsset.storageKey}</p>
-        )}
-      </CardContent>
+    <Card className="mt-2 overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[680px] text-left text-sm">
+          <caption className="sr-only">{t("runHistory.caption")}</caption>
+          <RunHistoryHead />
+          <tbody className="divide-y divide-border">
+            {props.runs.map((run) => (
+              <RunHistoryRow
+                key={run.id}
+                locale={locale}
+                onSelect={props.onSelect}
+                run={run}
+                selected={run.id === props.selectedRunId}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
 }
 
-function TaskAssets({
-  title,
-  assets,
-  emptyText,
-  signingError,
-  signingErrorLabel,
-  statusLabels
-}: {
-  title: string;
-  assets: LibraryAsset[];
-  emptyText: string;
-  signingError: string | null;
-  signingErrorLabel: string;
-  statusLabels: Record<string, string>;
-}) {
+function RunHistoryHead() {
+  const t = useTranslations("console");
   return (
-    <section className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold text-white">{title}</h2>
-      <AssetSections
-        assets={assets}
-        emptyText={emptyText}
-        signingError={signingError}
-        signingErrorLabel={signingErrorLabel}
-        statusLabels={statusLabels}
-        showTaskTitle={false}
-      />
-    </section>
+    <thead className="border-b bg-muted/50 text-xs text-muted-foreground">
+      <tr>
+        <th className="px-4 py-3">{t("runHistory.run")}</th>
+        <th className="px-4 py-3">{t("runHistory.status")}</th>
+        <th className="px-4 py-3">{t("runHistory.stage")}</th>
+        <th className="px-4 py-3">{t("runHistory.created")}</th>
+      </tr>
+    </thead>
   );
 }
 
-function formatUsd(value: number) {
-  return `$${value.toFixed(4)}`;
-}
-
-function formatQuantity(value: number) {
-  return Number.isInteger(value) ? String(value) : value.toFixed(2);
-}
-
-function StageTimeline({ status, stages }: { status: RunStatus; stages: StageSnapshot[] }) {
+function RunHistoryRow(props: {
+  run: RunListItem;
+  locale: string;
+  selected: boolean;
+  onSelect?: (runId: string) => void;
+}) {
   const t = useTranslations("console");
-  const tStatus = useTranslations("status");
+  const status = props.run.status as RunStatus;
+  return (
+    <tr className={cn(props.selected && "bg-muted/40")}>
+      <td className="px-4 py-3">
+        <button
+          className="font-mono text-xs text-foreground transition-colors duration-control hover:text-brand"
+          onClick={() => props.onSelect?.(props.run.id)}
+          type="button"
+        >
+          {props.run.id}
+        </button>
+      </td>
+      <td className="px-4 py-3">
+        <StatusBadge status={runStatusTone(status)}>
+          {t(`statuses.${status}`)}
+        </StatusBadge>
+      </td>
+      <td className="px-4 py-3 text-muted-foreground">
+        {props.run.current_stage
+          ? t(`stages.${props.run.current_stage}`)
+          : t("notStarted")}
+      </td>
+      <td className="px-4 py-3 text-muted-foreground">
+        {formatDate(props.run.created_at, props.locale)}
+      </td>
+    </tr>
+  );
+}
 
+function StageTimeline({
+  status,
+  stages,
+}: {
+  status: RunStatus;
+  stages: StageSnapshot[];
+}) {
+  const t = useTranslations("console");
+  const progress = getProgress(status, stages);
   return (
     <Card className="h-fit">
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>{t("stages")}</CardTitle>
-        <Badge variant={runBadge[status]}>{tStatus(status)}</Badge>
+      <CardHeader className="gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle>{t("stagesTitle")}</CardTitle>
+          <StatusBadge status={runStatusTone(status)}>
+            {t(`statuses.${status}`)}
+          </StatusBadge>
+        </div>
+        <div className="flex items-center gap-3">
+          <Progress
+            value={progress}
+            label={t("progressLabel", { value: progress })}
+          />
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {progress}%
+          </span>
+        </div>
       </CardHeader>
-      <CardContent className="relative flex flex-col gap-3 p-5">
-        <span className="absolute bottom-6 left-14 top-5 w-px bg-zinc-800" />
+      <CardContent className="flex flex-col gap-2">
         {stages.map((stage, index) => (
-          <StageRow key={stage.type} index={index + 1} stage={stage} />
+          <StageRow index={index + 1} key={stage.type} stage={stage} />
         ))}
       </CardContent>
     </Card>
@@ -559,70 +457,102 @@ function StageTimeline({ status, stages }: { status: RunStatus; stages: StageSna
 
 function StageRow({ index, stage }: { index: number; stage: StageSnapshot }) {
   const t = useTranslations("console");
-  const Icon = stageIcon[stage.status] ?? Circle;
-
+  const Icon = stageIcon(stage.status);
   return (
-    <div className="relative flex gap-4 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 p-4 transition-all duration-200 hover:border-zinc-700">
+    <div className="flex items-center gap-3 rounded-md border bg-background/40 p-3">
       <span
         className={cn(
-          "absolute inset-y-0 left-0 w-1 rounded-l-lg",
-          stageBarColor[stage.status] ?? "bg-zinc-500"
-        )}
-      />
-      <span
-        className={cn(
-          "z-10 flex size-10 shrink-0 items-center justify-center rounded-full bg-zinc-900 ring-1 ring-zinc-800",
-          stage.status === "RUNNING" && "bg-cyan-950/30 ring-cyan-500/30",
-          stage.status === "COMPLETED" && "bg-zinc-800 ring-zinc-700",
-          (stage.status === "FAILED" || stage.status === "CANCELLED") && "bg-red-950/40 ring-red-900/50"
+          "flex size-8 items-center justify-center rounded-full bg-muted",
+          stageTone(stage.status),
         )}
       >
         <Icon
-          className={cn(
-            "size-5",
-            stageColor[stage.status] ?? "text-zinc-400",
-            stage.status === "RUNNING" && "animate-spin"
-          )}
+          className={cn("size-4", stage.status === "RUNNING" && "animate-spin")}
         />
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="truncate text-sm font-semibold text-white">{stage.label}</h3>
-          <span className="text-xs text-zinc-400 tabular-nums">0{index}</span>
-        </div>
-        <p className="text-xs text-zinc-400">{getStageText(stage.status, t)}</p>
+      <div className="min-w-0 flex-1">
+        <h3 className="truncate text-sm font-semibold text-foreground">
+          {stage.label}
+        </h3>
+        <p className="text-xs text-muted-foreground">
+          {t(`stageStatus.${stage.status.toLowerCase()}`)}
+        </p>
       </div>
+      <span className="text-xs tabular-nums text-muted-foreground">
+        {String(index).padStart(2, "0")}
+      </span>
     </div>
+  );
+}
+
+function FinalOutputPanel({
+  status,
+  assets,
+}: {
+  status: RunStatus;
+  assets: LibraryAsset[];
+}) {
+  const t = useTranslations("console");
+  const { revealAsset } = useServices();
+  const finalAsset = assets.find((asset) => asset.type === "FINAL_VIDEO");
+  return (
+    <Card className="min-h-[260px]">
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle>{t("finalOutputTitle")}</CardTitle>
+        {finalAsset ? (
+          <Button
+            onClick={() => void revealAsset(finalAsset.storageKey)}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            {t("openInFolder")}
+          </Button>
+        ) : null}
+      </CardHeader>
+      <CardContent>
+        {finalAsset?.url ? (
+          <video
+            className="aspect-video w-full rounded-md bg-black object-contain"
+            controls
+            src={finalAsset.url}
+          />
+        ) : (
+          <div className="flex aspect-video items-center justify-center rounded-md border border-dashed bg-muted/30 text-sm text-muted-foreground">
+            {status === "COMPLETED"
+              ? t("finalOutputUnavailable")
+              : t("finalOutputPending")}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
 function LogPanel({
   connected,
   logs,
-  status
+  status,
 }: {
   connected: boolean;
   logs: LogSnapshot[];
   status: RunStatus;
 }) {
   const t = useTranslations("console");
-
   return (
-    <Card className="flex min-h-[520px] flex-col">
+    <Card className="min-h-[420px]">
       <CardHeader className="flex-row items-center justify-between">
         <CardTitle>{t("liveLog")}</CardTitle>
         <ConnectionState connected={connected} status={status} />
       </CardHeader>
-      <CardContent className="flex-1">
-        <div className="flex h-full flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-4 font-mono text-xs shadow-inner">
+      <CardContent>
+        <div className="max-h-[540px] overflow-auto rounded-md border bg-surface-inset p-4 font-mono text-xs">
           {logs.length === 0 ? (
-            <span className="text-zinc-400">{t("noLogs")}</span>
+            <span className="text-muted-foreground">{t("noLogs")}</span>
           ) : (
-            <div className="flex flex-col gap-2">
-              {logs.map((log, index) => (
-                <LogLine key={index} log={log} />
-              ))}
-            </div>
+            logs.map((log, index) => (
+              <LogLine key={`${log.ts}-${index}`} log={log} />
+            ))
           )}
         </div>
       </CardContent>
@@ -632,47 +562,142 @@ function LogPanel({
 
 function LogLine({ log }: { log: LogSnapshot }) {
   return (
-    <div className="grid grid-cols-[72px_60px_1fr] gap-3 animate-fade-in">
-      <span className="text-zinc-400">[{log.ts}]</span>
-      <LogLevelBadge level={log.level} />
-      <span className="text-zinc-200">{log.message}</span>
+    <div className="grid grid-cols-[72px_56px_minmax(0,1fr)] gap-3 py-1">
+      <span className="text-muted-foreground">[{log.ts}]</span>
+      <span
+        className={cn(
+          "font-semibold",
+          log.level === "ERROR" ? "text-danger" : "text-muted-foreground",
+        )}
+      >
+        {log.level}
+      </span>
+      <span className="break-words text-foreground">{log.message}</span>
     </div>
   );
 }
 
-function LogLevelBadge({ level }: { level: string }) {
+function CostPanel({ summary }: { summary: CostSummary }) {
+  const t = useTranslations("console");
   return (
-    <span
-      className={cn(
-        "flex h-5 w-fit items-center justify-center rounded px-1.5 text-[10px] font-bold uppercase tracking-wide",
-        logBg[level] ?? "bg-zinc-900",
-        logColor[level] ?? "text-zinc-300"
-      )}
-    >
-      {level}
-    </span>
+    <Card className="h-fit">
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle>{t("costsTitle")}</CardTitle>
+        <span className="font-semibold tabular-nums">
+          {formatUsd(summary.total_cost_usd)}
+        </span>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {summary.incomplete ? (
+          <Badge variant="warning">
+            <AlertTriangle />
+            {t("costIncomplete")}
+          </Badge>
+        ) : null}
+        {summary.providers.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t("noCosts")}</p>
+        ) : (
+          summary.providers.map((provider) => (
+            <ProviderCost
+              key={provider.provider}
+              provider={provider}
+              total={summary.total_cost_usd}
+            />
+          ))
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
-function ConnectionState({ connected, status }: { connected: boolean; status: RunStatus }) {
+function ProviderCost({
+  provider,
+  total,
+}: {
+  provider: CostSummary["providers"][number];
+  total: number;
+}) {
   const t = useTranslations("console");
-  const live = status === "RUNNING" || status === "PENDING";
-
+  const ratio = total > 0 ? Math.min(1, provider.cost_usd / total) : 0;
   return (
-    <span
-      className={cn(
-        "flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
-        connected && live
-          ? "border-cyan-500/30 bg-cyan-950/30 text-cyan-300"
-          : "border-zinc-800 bg-zinc-900 text-zinc-400",
-        !connected && "border-red-900/50 bg-red-950/40 text-red-200"
-      )}
+    <div className="rounded-md border p-3">
+      <div className="flex justify-between gap-3 text-sm">
+        <strong>{provider.provider}</strong>
+        <span className="tabular-nums">{formatUsd(provider.cost_usd)}</span>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+        <div
+          className="motion-progress h-full origin-left bg-brand transition-transform duration-panel"
+          style={{ transform: `scaleX(${ratio})` }}
+          role="progressbar"
+          aria-label={`${provider.provider}: ${Math.round(ratio * 100)}%`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(ratio * 100)}
+        />
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        {t("costUsageMeta", {
+          quantity: provider.quantity,
+          unit: provider.unit,
+          calls: provider.calls,
+        })}
+      </p>
+    </div>
+  );
+}
+
+function RefreshWarning({
+  error,
+  lastUpdated,
+  onRetry,
+}: {
+  error: string;
+  lastUpdated: Date;
+  onRetry: () => Promise<void>;
+}) {
+  const t = useTranslations("console");
+  const { locale } = useLocale();
+  return (
+    <div
+      className="flex flex-wrap items-center gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm"
+      role="status"
     >
+      <AlertTriangle className="size-4 text-amber-500" />
+      <span className="min-w-0 flex-1">
+        {t("refreshWarning", {
+          message: error,
+          time: lastUpdated.toLocaleTimeString(locale),
+        })}
+      </span>
+      <Button
+        onClick={() => void onRetry()}
+        size="sm"
+        type="button"
+        variant="outline"
+      >
+        <RefreshCw />
+        {t("retry")}
+      </Button>
+    </div>
+  );
+}
+
+function ConnectionState({
+  connected,
+  status,
+}: {
+  connected: boolean;
+  status: RunStatus;
+}) {
+  const t = useTranslations("console");
+  const live = ACTIVE_STATUSES.has(status);
+  return (
+    <span className="flex items-center gap-2 text-xs text-muted-foreground">
       <span
         className={cn(
           "size-2 rounded-full",
-          connected && live ? "animate-pulse bg-cyan-400 shadow-glow" : "bg-zinc-500",
-          !connected && "bg-red-400"
+          connected && live ? "bg-success" : "bg-muted-foreground",
         )}
       />
       {connected ? (live ? t("streaming") : t("idle")) : t("disconnected")}
@@ -680,9 +705,46 @@ function ConnectionState({ connected, status }: { connected: boolean; status: Ru
   );
 }
 
-function getStageText(status: StageStatus, t: (key: string) => string) {
-  if (status === "RUNNING") return t("stageStatus.running");
-  if (status === "COMPLETED") return t("stageStatus.done");
-  if (status === "FAILED" || status === "CANCELLED") return t("stageStatus.failed");
-  return t("stageStatus.queued");
+function getProgress(status: RunStatus, stages: StageSnapshot[]) {
+  if (status === "COMPLETED") return 100;
+  if (stages.length === 0) return 0;
+  return Math.round(
+    (stages.filter((stage) => stage.status === "COMPLETED").length /
+      stages.length) *
+      100,
+  );
+}
+
+function stageIcon(status: StageStatus) {
+  if (status === "COMPLETED") return CheckCircle2;
+  if (status === "RUNNING") return Loader2;
+  if (status === "FAILED" || status === "CANCELLED") return XCircle;
+  return Circle;
+}
+
+function stageTone(status: StageStatus) {
+  if (status === "COMPLETED") return "text-success";
+  if (status === "RUNNING") return "text-brand";
+  if (status === "FAILED" || status === "CANCELLED") return "text-danger";
+  return "text-muted-foreground";
+}
+
+function runStatusTone(status: RunStatus) {
+  if (status === "RUNNING") return "running" as const;
+  if (status === "COMPLETED") return "success" as const;
+  if (status === "FAILED" || status === "CANCELLED") return "error" as const;
+  return "neutral" as const;
+}
+
+function formatUsd(value: number) {
+  return `$${value.toFixed(4)}`;
+}
+function formatError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+function formatDate(value: string, locale: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString(locale, { hour12: false });
 }
