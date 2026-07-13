@@ -19,8 +19,8 @@ export function PageHeader({
       )}
     >
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{title}</h1>
-        {description ? <p className="text-sm text-zinc-500">{description}</p> : null}
+        <h1 className="text-2xl font-semibold text-foreground sm:text-3xl">{title}</h1>
+        {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2 pt-1">{actions}</div> : null}
     </header>

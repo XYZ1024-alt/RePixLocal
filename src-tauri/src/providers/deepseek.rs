@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
 use serde::Deserialize;
@@ -10,7 +11,7 @@ use crate::models::{
     DeepSeekBalance, DeepSeekBalanceInfo, ProviderListingCredentials, ProviderSettings,
     RewrittenScene, TranscriptSegment,
 };
-use crate::providers::http_client::{build_http_client, format_http_error};
+use crate::providers::http_client::{build_http_client, format_http_error, retry_connect_once};
 use crate::providers::json_util::parse_json_payload;
 
 const SYSTEM_PROMPT_WITH_VISUALS: &str = r#"You are a video director creating a replicated video that maintains visual similarity to the source.
@@ -61,17 +62,19 @@ Image scenes:
 Output JSON array only:
 [{"index": 0, "scriptText": "...", "motionPrompt": "..."}, ...]"#;
 
-const SUBTITLE_CORRECTION_PROMPT: &str = r#"You are a subtitle proofreader. Correct ASR subtitle text while preserving the speaker's original meaning.
+const TRANSCRIPT_CORRECTION_PROMPT: &str = r#"You are a transcript proofreader. Correct ASR transcript text while preserving the speaker's original meaning.
 Rules:
 - Return ONLY a JSON array.
 - Return exactly {n} items, in the same order as the input.
 - Each item must be {"index": int, "text": str}.
-- Do not add, remove, split, merge, or reorder subtitles.
+- Do not add, remove, split, merge, or reorder transcript segments.
 - Do not include startMs or endMs.
 - Correct homophones, punctuation, and obvious ASR errors.
-- Keep wording concise enough for subtitles.
+- Keep wording concise.
 - Output language: {target_language}.
 - If output language is Simplified Chinese, use Simplified Chinese only; do not output Traditional Chinese."#;
+
+const CHAT_CONNECT_RETRY_DELAY_MS: u64 = 500;
 
 #[derive(Debug, Clone)]
 pub struct DeepSeekClient {
@@ -100,7 +103,7 @@ impl DeepSeekClient {
         Self { repo }
     }
 
-    pub async fn correct_subtitles(
+    pub async fn correct_transcript(
         &self,
         segments: &[TranscriptSegment],
         target_language: &str,
@@ -122,7 +125,7 @@ impl DeepSeekClient {
             "messages": [
                 {
                     "role": "system",
-                    "content": SUBTITLE_CORRECTION_PROMPT
+                    "content": TRANSCRIPT_CORRECTION_PROMPT
                         .replace("{n}", &segments.len().to_string())
                         .replace("{target_language}", target_language),
                 },
@@ -133,9 +136,9 @@ impl DeepSeekClient {
             ],
         });
         let output = self.chat_completion(&settings, payload).await?;
-        let corrections = parse_subtitle_corrections(&output.value, segments.len())?;
+        let corrections = parse_transcript_corrections(&output.value, segments.len())?;
         Ok(DeepSeekOutput {
-            value: merge_subtitle_corrections(segments, &corrections),
+            value: merge_transcript_corrections(segments, &corrections),
             usage: output.usage,
         })
     }
@@ -268,12 +271,15 @@ impl DeepSeekClient {
         let base_url = normalize_openai_base_url(&settings.base_url);
         let client = build_http_client(120)?;
         let url = format!("{base_url}/chat/completions");
-        let response = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", settings.api_key))
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
+        let response =
+            retry_connect_once(Duration::from_millis(CHAT_CONNECT_RETRY_DELAY_MS), || {
+                client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", settings.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&payload)
+                    .send()
+            })
             .await
             .map_err(|error| AppError::Provider(format_http_error(&url, error)))?;
         if !response.status().is_success() {
@@ -365,14 +371,14 @@ fn parse_scenes(content: &str, target_scenes: i32) -> AppResult<Vec<RewrittenSce
     Ok(scenes)
 }
 
-fn parse_subtitle_corrections(content: &str, expected_count: usize) -> AppResult<Vec<String>> {
+fn parse_transcript_corrections(content: &str, expected_count: usize) -> AppResult<Vec<String>> {
     let data = parse_json_payload(content)?;
     let items = data.as_array().ok_or_else(|| {
-        AppError::Provider("DeepSeek subtitle correction must return a JSON array".into())
+        AppError::Provider("DeepSeek transcript correction must return a JSON array".into())
     })?;
     if items.len() != expected_count {
         return Err(AppError::Provider(format!(
-            "DeepSeek returned {} subtitle corrections, expected {expected_count}",
+            "DeepSeek returned {} transcript corrections, expected {expected_count}",
             items.len()
         )));
     }
@@ -380,13 +386,12 @@ fn parse_subtitle_corrections(content: &str, expected_count: usize) -> AppResult
         .iter()
         .enumerate()
         .map(|(index, item)| {
-            let actual_index = item
-                .get("index")
-                .and_then(Value::as_i64)
-                .ok_or_else(|| AppError::Provider(format!("subtitle {index} missing index")))?;
+            let actual_index = item.get("index").and_then(Value::as_i64).ok_or_else(|| {
+                AppError::Provider(format!("transcript segment {index} missing index"))
+            })?;
             if actual_index != index as i64 {
                 return Err(AppError::Provider(format!(
-                    "subtitle correction index mismatch: expected {index}, got {actual_index}"
+                    "transcript correction index mismatch: expected {index}, got {actual_index}"
                 )));
             }
             item.get("text")
@@ -394,12 +399,14 @@ fn parse_subtitle_corrections(content: &str, expected_count: usize) -> AppResult
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
-                .ok_or_else(|| AppError::Provider(format!("subtitle {index} missing text")))
+                .ok_or_else(|| {
+                    AppError::Provider(format!("transcript segment {index} missing text"))
+                })
         })
         .collect()
 }
 
-fn merge_subtitle_corrections(
+fn merge_transcript_corrections(
     segments: &[TranscriptSegment],
     corrections: &[String],
 ) -> Vec<TranscriptSegment> {

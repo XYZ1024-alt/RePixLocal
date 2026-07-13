@@ -60,7 +60,7 @@ pub enum AssetType {
     Keyframe,
     GeneratedFrame,
     VideoSegment,
-    Subtitle,
+    Transcript,
     FinalVideo,
 }
 

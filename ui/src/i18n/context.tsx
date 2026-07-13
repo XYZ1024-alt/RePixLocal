@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import en from "@/messages/en.json";
 import zh from "@/messages/zh.json";
 import { defaultLocale, isLocale, LOCALE_STORAGE_KEY, type Locale } from "./config";
@@ -39,6 +39,10 @@ function interpolate(template: string, values?: Record<string, string | number>)
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(readStoredLocale);
 
+  useEffect(() => {
+    document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
+  }, [locale]);
+
   const setLocale = useCallback((next: Locale) => {
     localStorage.setItem(LOCALE_STORAGE_KEY, next);
     setLocaleState(next);
@@ -62,8 +66,12 @@ export function useTranslations(namespace: string) {
 
   return useCallback(
     (key: string, values?: Record<string, string | number>) => {
-      const text = lookup(catalogs[locale], `${namespace}.${key}`) ?? key;
-      return interpolate(text, values);
+      const catalogKey = `${namespace}.${key}`;
+      const text = lookup(catalogs[locale], catalogKey);
+      if (text === undefined) {
+        console.error(`[i18n] Missing ${locale} message: ${catalogKey}`);
+      }
+      return interpolate(text ?? key, values);
     },
     [locale, namespace]
   );

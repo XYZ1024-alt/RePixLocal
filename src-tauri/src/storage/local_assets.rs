@@ -135,10 +135,10 @@ impl AssetManager {
             .join("output.mp4")
     }
 
-    pub fn subtitle_path(&self, task_id: &str) -> PathBuf {
+    pub fn transcript_path(&self, task_id: &str) -> PathBuf {
         self.workspace
             .task_dir(task_id)
-            .join("subtitles")
+            .join("transcript")
             .join("transcript.json")
     }
 
@@ -167,7 +167,7 @@ impl AssetManager {
         Ok(())
     }
 
-    pub async fn write_subtitle_json(&self, path: &Path, segments: &Value) -> AppResult<()> {
+    pub async fn write_transcript_json(&self, path: &Path, segments: &Value) -> AppResult<()> {
         ensure_parent(path).await?;
         let body = serde_json::to_vec_pretty(segments)?;
         fs::write(path, body).await?;

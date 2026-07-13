@@ -1,220 +1,485 @@
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle } from "lucide-react";
-import { checkFfmpeg, ensureWhisperModel, getDashboardData, getSettings } from "./api";
-import { Shell } from "./components/Shell";
-import { useTranslations } from "./i18n/context";
-import { DashboardView } from "./views/DashboardView";
-import { TaskWizardView } from "./views/TaskWizardView";
-import { ConsoleListView } from "./views/ConsoleListView";
-import { ConsoleDetailView } from "./views/ConsoleDetailView";
-import { AssetLibraryView } from "./views/AssetLibraryView";
-import { SettingsView } from "./views/SettingsView";
-import type { DashboardData, PipelineEvent, Settings, ToolCheck, ViewKey } from "./types";
+import { AlertTriangle, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Shell } from "@/components/Shell";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog";
+import { useTranslations } from "@/i18n/context";
+import { useServices } from "@/services/context";
+import { AssetLibraryView } from "@/views/AssetLibraryView";
+import { ConsoleDetailView } from "@/views/ConsoleDetailView";
+import { DashboardView } from "@/views/DashboardView";
+import { SettingsView } from "@/views/SettingsView";
+import { TaskWizardView } from "@/views/TaskWizardView";
+import { TasksView } from "@/views/TasksView";
+import type {
+  AppRoute,
+  DashboardData,
+  NavigationIntent,
+  PipelineEvent,
+  ProviderCredentialView,
+  ReadinessIssue,
+  ReadinessState,
+  Settings,
+  ToolCheck
+} from "@/types";
+
+type CredentialState = {
+  providers: ProviderCredentialView[];
+  dashscopeConfigured: boolean;
+  loaded: boolean;
+};
+
+type WizardResult = { taskId: string; runId: string };
+
+const INITIAL_SETTINGS: Settings = { workspace_root: "" };
 
 export function App() {
-  const [view, setView] = useState<ViewKey>("dashboard");
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const services = useServices();
+  const [navigation, setNavigation] = useState<NavigationIntent>({ route: "home" });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < 1100);
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
-  const [settings, setSettings] = useState<Settings>({ workspace_root: "" });
+  const [dashboardLoaded, setDashboardLoaded] = useState(false);
+  const [settings, setSettings] = useState<Settings>(INITIAL_SETTINGS);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [tools, setTools] = useState<ToolCheck[]>([]);
+  const [toolsLoaded, setToolsLoaded] = useState(false);
+  const [credentials, setCredentials] = useState<CredentialState>({
+    providers: [],
+    dashscopeConfigured: false,
+    loaded: false
+  });
   const [message, setMessage] = useState("");
+  const [wizardDirty, setWizardDirty] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<NavigationIntent | null>(null);
   const latestDashboardRequest = useRef(0);
   const latestToolsRequest = useRef(0);
-  const whisperDownloadQueue = useRef<{
+  const whisperDownloadQueue = useWhisperQueue({ services, setMessage });
+
+  const refreshDashboard = useCallback(async () => {
+    const requestId = ++latestDashboardRequest.current;
+    try {
+      const nextDashboard = await services.getDashboardData();
+      if (requestId === latestDashboardRequest.current) {
+        setDashboardData(nextDashboard);
+        setDashboardLoaded(true);
+      }
+    } catch (error) {
+      if (requestId === latestDashboardRequest.current) throw error;
+    }
+  }, [services]);
+
+  const refreshTools = useCallback(async () => {
+    const requestId = ++latestToolsRequest.current;
+    try {
+      const nextTools = await services.checkFfmpeg();
+      if (requestId === latestToolsRequest.current) {
+        setTools(nextTools);
+        setToolsLoaded(true);
+      }
+    } catch (error) {
+      if (requestId === latestToolsRequest.current) throw error;
+    }
+  }, [services]);
+
+  const refreshCredentials = useCallback(async () => {
+    try {
+      const [providerRows, dashscope] = await Promise.all([
+        services.listProviderCredentials(),
+        services.listDashscopeCredentials()
+      ]);
+      setCredentials({
+        providers: providerRows,
+        dashscopeConfigured: Boolean(dashscope.masked_key) && !dashscope.key_decrypt_failed,
+        loaded: true
+      });
+    } catch (error) {
+      setCredentials({ providers: [], dashscopeConfigured: false, loaded: true });
+      throw error;
+    }
+  }, [services]);
+
+  const startWhisperDownload = useCallback(
+    (model?: string) => whisperDownloadQueue.start(model, refreshTools),
+    [refreshTools, whisperDownloadQueue]
+  );
+
+  const refreshApp = useCallback(async () => {
+    const nextSettings = await services.getSettings();
+    setSettings(nextSettings);
+    setSettingsLoaded(true);
+    startWhisperDownload(nextSettings.asr_model);
+    await Promise.all([refreshTools(), refreshCredentials()]);
+  }, [refreshCredentials, refreshTools, services, startWhisperDownload]);
+
+  useEffect(() => {
+    refreshApp().catch((error) => setMessage(String(error)));
+  }, [refreshApp]);
+
+  const reportError = useCallback((error: unknown) => setMessage(String(error)), []);
+
+  useDashboardEvents({
+    active: navigation.route === "home",
+    refreshDashboard,
+    onError: reportError
+  });
+
+  const readiness = useMemo(
+    () => buildReadiness({ settings, settingsLoaded, tools, toolsLoaded, credentials }),
+    [credentials, settings, settingsLoaded, tools, toolsLoaded]
+  );
+
+  function commitNavigation(intent: NavigationIntent) {
+    setNavigation(intent);
+  }
+
+  function navigate(intent: NavigationIntent | AppRoute) {
+    const next = typeof intent === "string" ? { route: intent } : intent;
+    if (navigation.route === "new-task" && next.route !== "new-task" && wizardDirty) {
+      setPendingNavigation(next);
+      return;
+    }
+    commitNavigation(next);
+  }
+
+  function handleWizardSubmitted(result: WizardResult) {
+    setWizardDirty(false);
+    commitNavigation({ route: "task-detail", taskId: result.taskId, runId: result.runId });
+  }
+
+  function handleSettingsSaved(next: Settings) {
+    setSettings(next);
+    void refreshCredentials().catch((error) => setMessage(String(error)));
+  }
+
+  return (
+    <Shell
+      activeRoute={navigation.route}
+      collapsed={sidebarCollapsed}
+      readiness={readiness}
+      onNavigate={(route) => navigate(route)}
+      onNewTask={() => navigate("new-task")}
+      onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
+    >
+      {message ? <ErrorBanner message={message} onDismiss={() => setMessage("")} /> : null}
+      <CurrentView
+        navigation={navigation}
+        dashboardData={dashboardData}
+        dashboardLoaded={dashboardLoaded}
+        settings={settings}
+        tools={tools}
+        readiness={readiness}
+        onNavigate={navigate}
+        onRefreshTools={refreshTools}
+        onEnsureWhisperModel={startWhisperDownload}
+        onSettingsSaved={handleSettingsSaved}
+        onMessage={setMessage}
+        onWizardDirtyChange={setWizardDirty}
+        onWizardSubmitted={handleWizardSubmitted}
+      />
+      <LeaveDraftDialog
+        open={pendingNavigation !== null}
+        onKeep={() => {
+          if (pendingNavigation) commitNavigation(pendingNavigation);
+          setPendingNavigation(null);
+        }}
+        onStay={() => setPendingNavigation(null)}
+        onDiscard={() => {
+          sessionStorage.removeItem("repix:wizard-draft");
+          setWizardDirty(false);
+          if (pendingNavigation) commitNavigation(pendingNavigation);
+          setPendingNavigation(null);
+        }}
+      />
+    </Shell>
+  );
+}
+
+function CurrentView(props: {
+  navigation: NavigationIntent;
+  dashboardData: DashboardData | null;
+  dashboardLoaded: boolean;
+  settings: Settings;
+  tools: ToolCheck[];
+  readiness: ReadinessState;
+  onNavigate: (intent: NavigationIntent | AppRoute) => void;
+  onRefreshTools: () => Promise<void>;
+  onEnsureWhisperModel: (model?: string) => void;
+  onSettingsSaved: (settings: Settings) => void;
+  onMessage: (message: string) => void;
+  onWizardDirtyChange: (dirty: boolean) => void;
+  onWizardSubmitted: (result: WizardResult) => void;
+}) {
+  const services = useServices();
+  const { navigation } = props;
+  if (navigation.route === "home") {
+    return (
+      <DashboardView
+        data={props.dashboardData}
+        loaded={props.dashboardLoaded}
+        onNewTask={() => props.onNavigate("new-task")}
+        onOpenRun={(runId) => {
+          void services
+            .getRun(runId)
+            .then((detail) => {
+              if (!detail) throw new Error(`Run not found: ${runId}`);
+              props.onNavigate({ route: "task-detail", taskId: detail.task_id, runId });
+            })
+            .catch((error) => props.onMessage(String(error)));
+        }}
+        onOpenTasks={(taskFilter) => props.onNavigate({ route: "tasks", taskFilter })}
+      />
+    );
+  }
+  if (navigation.route === "tasks") {
+    return (
+      <TasksView
+        initialFilter={navigation.taskFilter}
+        onOpenTask={(taskId, runId) =>
+          props.onNavigate({ route: "task-detail", taskId, runId })
+        }
+      />
+    );
+  }
+  if (navigation.route === "task-detail") {
+    return (
+      <ConsoleDetailView
+        taskId={navigation.taskId ?? null}
+        runId={navigation.runId ?? null}
+        onBack={() => props.onNavigate({ route: "tasks" })}
+        onResumed={(runId) => props.onNavigate({ ...navigation, runId })}
+        onRunSelected={(runId) => props.onNavigate({ ...navigation, runId })}
+      />
+    );
+  }
+  if (navigation.route === "new-task") {
+    return (
+      <TaskWizardView
+        readiness={props.readiness}
+        onCancel={() => props.onNavigate("home")}
+        onDirtyChange={props.onWizardDirtyChange}
+        onOpenSettings={() => props.onNavigate("settings")}
+        onSubmitted={props.onWizardSubmitted}
+      />
+    );
+  }
+  if (navigation.route === "assets") {
+    return <AssetLibraryView />;
+  }
+  return (
+    <SettingsView
+      settings={props.settings}
+      tools={props.tools}
+      readiness={props.readiness}
+      onEnsureWhisperModel={props.onEnsureWhisperModel}
+      onRefresh={props.onRefreshTools}
+      onSettingsSaved={props.onSettingsSaved}
+      onMessage={props.onMessage}
+    />
+  );
+}
+
+function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  const t = useTranslations("shell");
+  return (
+    <div className="mx-4 mt-3 flex items-start gap-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger lg:mx-6" role="alert">
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">{t("unexpectedError")}</p>
+        <details className="mt-1 text-xs text-muted-foreground">
+          <summary className="cursor-pointer">{t("technicalDetails")}</summary>
+          <p className="mt-1 break-words font-mono">{message}</p>
+        </details>
+      </div>
+      <button type="button" onClick={onDismiss} aria-label={t("dismiss")} className="rounded p-1 hover:bg-danger/10">
+        <X className="size-4" />
+      </button>
+    </div>
+  );
+}
+
+function LeaveDraftDialog({
+  open,
+  onKeep,
+  onStay,
+  onDiscard
+}: {
+  open: boolean;
+  onKeep: () => void;
+  onStay: () => void;
+  onDiscard: () => void;
+}) {
+  const t = useTranslations("wizard");
+  return (
+    <AlertDialog open={open} onOpenChange={(nextOpen) => !nextOpen && onStay()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t("leaveDraftTitle")}</AlertDialogTitle>
+          <AlertDialogDescription>{t("leaveDraftDescription")}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={onStay}>{t("stay")}</AlertDialogCancel>
+          <AlertDialogAction className="border border-border bg-transparent text-foreground hover:bg-accent" onClick={onDiscard}>
+            {t("discardDraft")}
+          </AlertDialogAction>
+          <AlertDialogAction onClick={onKeep}>{t("keepDraft")}</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function useWhisperQueue({
+  services,
+  setMessage
+}: {
+  services: ReturnType<typeof useServices>;
+  setMessage: (message: string) => void;
+}) {
+  const queue = useRef({
+    activeModel: null as string | null,
+    pendingModels: [] as string[],
+    running: false,
+    settledModel: null as string | null,
+    settledSucceeded: false
+  });
+
+  return useMemo(
+    () => ({
+      start(model: string | undefined, refreshTools: () => Promise<void>) {
+        const modelName = model?.trim() || "base";
+        const state = queue.current;
+        if (state.activeModel === modelName) return;
+        if (state.settledModel === modelName && state.settledSucceeded) return;
+        if (state.pendingModels.includes(modelName)) return;
+        state.pendingModels.push(modelName);
+        if (state.running) return;
+        state.running = true;
+        void runWhisperQueue({ state, services, refreshTools, setMessage });
+      }
+    }),
+    [services, setMessage]
+  );
+}
+
+async function runWhisperQueue(options: {
+  state: {
     activeModel: string | null;
     pendingModels: string[];
     running: boolean;
     settledModel: string | null;
     settledSucceeded: boolean;
-  }>({
-    activeModel: null,
-    pendingModels: [],
-    running: false,
-    settledModel: null,
-    settledSucceeded: false
-  });
-
-  const refreshDashboard = useCallback(async () => {
-    const requestId = ++latestDashboardRequest.current;
-    try {
-      const nextDashboard = await getDashboardData();
-      if (requestId === latestDashboardRequest.current) {
-        setDashboardData(nextDashboard);
-      }
-    } catch (error) {
-      if (requestId === latestDashboardRequest.current) throw error;
-    }
-  }, []);
-
-  const refreshTools = useCallback(async () => {
-    const requestId = ++latestToolsRequest.current;
-    try {
-      const nextTools = await checkFfmpeg();
-      if (requestId === latestToolsRequest.current) {
-        setTools(nextTools);
-      }
-    } catch (error) {
-      if (requestId === latestToolsRequest.current) throw error;
-    }
-  }, []);
-
-  const startWhisperDownload = useCallback((model?: string) => {
-    const modelName = model?.trim() || "base";
-    const queue = whisperDownloadQueue.current;
-    if (queue.activeModel === modelName) return;
-    if (queue.settledModel === modelName && queue.settledSucceeded) return;
-    if (queue.pendingModels.includes(modelName)) return;
-
-    queue.pendingModels.push(modelName);
-    if (queue.running) return;
-    queue.running = true;
-
-    void (async () => {
+  };
+  services: ReturnType<typeof useServices>;
+  refreshTools: () => Promise<void>;
+  setMessage: (message: string) => void;
+}) {
+  const { state } = options;
+  try {
+    while (state.pendingModels.length > 0) {
+      const nextModel = state.pendingModels.shift() as string;
+      state.activeModel = nextModel;
+      let succeeded = false;
       try {
-        while (queue.pendingModels.length > 0) {
-          const nextModel = queue.pendingModels.shift() as string;
-          queue.activeModel = nextModel;
-          let succeeded = false;
-          try {
-            await ensureWhisperModel(nextModel);
-            succeeded = true;
-          } catch (error) {
-            setMessage(String(error));
-          } finally {
-            queue.activeModel = null;
-            queue.settledModel = nextModel;
-            queue.settledSucceeded = succeeded;
-            try {
-              await refreshTools();
-            } catch (error) {
-              setMessage(String(error));
-            } finally {
-              queue.settledModel = null;
-              queue.settledSucceeded = false;
-            }
-          }
-        }
+        await options.services.ensureWhisperModel(nextModel);
+        succeeded = true;
+      } catch (error) {
+        options.setMessage(String(error));
       } finally {
-        queue.activeModel = null;
-        queue.settledModel = null;
-        queue.settledSucceeded = false;
-        queue.running = false;
+        state.activeModel = null;
+        state.settledModel = nextModel;
+        state.settledSucceeded = succeeded;
+        try {
+          await options.refreshTools();
+        } catch (error) {
+          options.setMessage(String(error));
+        } finally {
+          state.settledModel = null;
+          state.settledSucceeded = false;
+        }
       }
-    })();
-  }, [refreshTools]);
+    }
+  } finally {
+    state.activeModel = null;
+    state.settledModel = null;
+    state.settledSucceeded = false;
+    state.running = false;
+  }
+}
 
-  const refresh = useCallback(async () => {
-    const nextSettings = await getSettings();
-    setSettings(nextSettings);
-    startWhisperDownload(nextSettings.asr_model);
-    await refreshTools();
-  }, [refreshTools, startWhisperDownload]);
-
+function useDashboardEvents(options: {
+  active: boolean;
+  refreshDashboard: () => Promise<void>;
+  onError: (error: unknown) => void;
+}) {
   useEffect(() => {
-    refresh().catch((error) => setMessage(String(error)));
-  }, [refresh]);
-
-  useEffect(() => {
-    if (view !== "dashboard") return;
-
+    if (!options.active) return;
     let active = true;
     let unlisten: (() => void) | undefined;
-    const reportError = (error: unknown) => {
-      if (active) setMessage(String(error));
+    const load = () => {
+      if (active) void options.refreshDashboard().catch(options.onError);
     };
-    const loadDashboard = () => {
-      if (!active) return;
-      void refreshDashboard().catch(reportError);
-    };
-
     void listen<PipelineEvent>("pipeline-event", (event) => {
-      if (event.payload.event === "run") loadDashboard();
+      if (event.payload.event === "run") load();
     })
       .then((dispose) => {
-        if (!active) {
-          dispose();
-          return;
-        }
+        if (!active) return dispose();
         unlisten = dispose;
-        loadDashboard();
+        load();
       })
       .catch((error) => {
-        reportError(error);
-        loadDashboard();
+        options.onError(error);
+        load();
       });
-
     return () => {
       active = false;
       unlisten?.();
     };
-  }, [refreshDashboard, view]);
-
-  function navigate(viewKey: ViewKey) {
-    setView(viewKey);
-    if (viewKey !== "console-detail") {
-      setSelectedRunId(null);
-    }
-  }
-
-  function navigateToWizard() {
-    navigate("wizard");
-  }
-
-  function navigateToConsoleDetail(runId: string) {
-    setSelectedRunId(runId);
-    setView("console-detail");
-  }
-
-  async function handleWizardSubmitted(runId: string) {
-    await refresh();
-    navigateToConsoleDetail(runId);
-  }
-
-  return (
-    <Shell activeView={view} hasError={Boolean(message)} onNavigate={navigate}>
-      {message && (
-        <ErrorBanner message={message} onDismiss={() => setMessage("")} />
-      )}
-      {view === "dashboard" && (
-        <DashboardView data={dashboardData} onNewTask={navigateToWizard} />
-      )}
-      {view === "wizard" && <TaskWizardView onSubmitted={handleWizardSubmitted} />}
-      {view === "console" && (
-        <ConsoleListView onOpenRun={navigateToConsoleDetail} />
-      )}
-      {view === "console-detail" && (
-        <ConsoleDetailView
-          runId={selectedRunId}
-          onBack={() => navigate("console")}
-          onResumed={navigateToConsoleDetail}
-        />
-      )}
-      {view === "library" && <AssetLibraryView onNewTask={navigateToWizard} />}
-      {view === "settings" && (
-        <SettingsView
-          settings={settings}
-          tools={tools}
-          onEnsureWhisperModel={startWhisperDownload}
-          onRefresh={refreshTools}
-          onSettingsSaved={setSettings}
-          onMessage={setMessage}
-        />
-      )}
-    </Shell>
-  );
+  }, [options.active, options.onError, options.refreshDashboard]);
 }
 
-function ErrorBanner(props: { message: string; onDismiss: () => void }) {
-  const t = useTranslations("shell");
-
-  return (
-    <div className="mx-4 mt-3 flex items-center gap-2 rounded-xl border border-red-900/50 bg-red-950/40 px-3 py-2 text-sm text-red-200 lg:mx-6">
-      <AlertTriangle size={16} />
-      <span className="flex-1">{props.message}</span>
-      <button className="text-xs text-red-100/80 hover:text-red-50" onClick={props.onDismiss} type="button">
-        {t("dismiss")}
-      </button>
-    </div>
-  );
+function buildReadiness(options: {
+  settings: Settings;
+  settingsLoaded: boolean;
+  tools: ToolCheck[];
+  toolsLoaded: boolean;
+  credentials: CredentialState;
+}): ReadinessState {
+  if (!options.settingsLoaded || !options.toolsLoaded || !options.credentials.loaded) {
+    return { status: "checking", mockMode: Boolean(options.settings.mock_providers), issues: [] };
+  }
+  const issues: ReadinessIssue[] = options.tools
+    .filter((tool) => !tool.found)
+    .map((tool) => ({
+      id: `tool-${tool.name}`,
+      label: tool.name,
+      detail: tool.error ?? tool.path ?? tool.name,
+      severity: "error" as const
+    }));
+  const mockMode = Boolean(options.settings.mock_providers);
+  if (!mockMode) {
+    const configured = new Set(
+      options.credentials.providers
+        .filter((credential) => credential.masked_key && !credential.key_decrypt_failed)
+        .map((credential) => credential.provider)
+    );
+    for (const provider of ["DEEPSEEK", "SEEDANCE"] as const) {
+      if (!configured.has(provider)) {
+        issues.push({ id: `provider-${provider}`, label: provider, detail: provider, severity: "warning" });
+      }
+    }
+    if (!options.credentials.dashscopeConfigured) {
+      issues.push({ id: "provider-DASHSCOPE", label: "DashScope", detail: "DashScope", severity: "warning" });
+    }
+  }
+  return { status: issues.length ? "attention" : "ready", mockMode, issues };
 }

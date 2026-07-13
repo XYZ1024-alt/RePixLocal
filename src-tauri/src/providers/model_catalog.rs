@@ -2,9 +2,12 @@ use serde_json::Value;
 
 use crate::errors::{AppError, AppResult};
 use crate::models::{ProviderListingCredentials, ProviderModelOption};
-use crate::providers::http_client::{build_http_client, format_http_error};
+use crate::providers::http_client::{
+    build_http_client, build_http_client_direct, format_http_error,
+};
 
 const DASHSCOPE_MODELS_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1/models";
+const MODELS_TIMEOUT_SECS: u64 = 30;
 const SEEDANCE_MODEL_MARKER: &str = "seedance";
 
 pub fn mock_models(provider: &str) -> Vec<ProviderModelOption> {
@@ -121,7 +124,8 @@ async fn fetch_deepseek_models(
 ) -> AppResult<Vec<ProviderModelOption>> {
     let base_url = ensure_v1_base_url(&creds.base_url);
     let url = format!("{base_url}/models");
-    let value = get_models_json(&url, &creds.api_key).await?;
+    let client = build_http_client(MODELS_TIMEOUT_SECS)?;
+    let value = get_models_json(&client, &url, &creds.api_key).await?;
     parse_openai_models_response(&value)
 }
 
@@ -130,7 +134,8 @@ async fn fetch_dashscope_models(
     keywords: &[&str],
     label: &str,
 ) -> AppResult<Vec<ProviderModelOption>> {
-    let value = get_models_json(DASHSCOPE_MODELS_URL, &creds.api_key).await?;
+    let client = build_http_client_direct(MODELS_TIMEOUT_SECS)?;
+    let value = get_models_json(&client, DASHSCOPE_MODELS_URL, &creds.api_key).await?;
     let models = parse_openai_models_response(&value)?;
     let filtered = filter_models_by_keywords(models, keywords);
     if filtered.is_empty() {
@@ -146,12 +151,12 @@ async fn fetch_seedance_models(
 ) -> AppResult<Vec<ProviderModelOption>> {
     let base_url = creds.base_url.trim().trim_end_matches('/');
     let url = format!("{base_url}/models");
-    let value = get_models_json(&url, &creds.api_key).await?;
+    let client = build_http_client_direct(MODELS_TIMEOUT_SECS)?;
+    let value = get_models_json(&client, &url, &creds.api_key).await?;
     parse_seedance_models_response(&value)
 }
 
-async fn get_models_json(url: &str, api_key: &str) -> AppResult<Value> {
-    let client = build_http_client(30)?;
+async fn get_models_json(client: &reqwest::Client, url: &str, api_key: &str) -> AppResult<Value> {
     let response = client
         .get(url)
         .header("Authorization", format!("Bearer {api_key}"))

@@ -12,10 +12,7 @@ use crate::db::Repository;
 use crate::errors::{AppError, AppResult};
 use crate::media::ffmpeg::FfmpegRunner;
 use crate::media::frames::{extract_keyframes, KeyframeOptions, DEFAULT_SUBTITLE_REGION_RATIO};
-use crate::media::subtitles::{
-    ass_style_from_config, build_ass, cues_from_scenes_with_tts, read_segments_from_json,
-    segments_to_json, transcript_text,
-};
+use crate::media::transcript::{read_segments_from_json, segments_to_json, transcript_text};
 use crate::media::whisper::WhisperRunner;
 use crate::models::{AssetType, Scene, StageType, Task, WorkflowTaskType};
 use crate::providers::cosyvoice::CosyVoiceClient;
@@ -30,6 +27,10 @@ use crate::storage::local_assets::{asset_for_path, mock_transcript_segments, Ass
 use crate::workflow::events::{emit_pipeline_event, PipelineEvent};
 use crate::workflow::stages::{ordered_stages, stage_event_name};
 use crate::workspace::Workspace;
+
+const SEEDANCE_MIN_DURATION_SECS: f64 = 4.0;
+const SEEDANCE_MAX_DURATION_SECS: f64 = 10.0;
+const SEEDANCE_DEFAULT_DURATION_SECS: f64 = 5.0;
 
 #[derive(Debug, Clone)]
 pub struct PipelineRunner {
@@ -210,7 +211,7 @@ impl PipelineRunner {
                     .await
             }
             StageType::FinalRender => {
-                self.real_render_stage(task_id, run_id, app, task, scene_count)
+                self.real_render_stage(task_id, run_id, app, scene_count)
                     .await
             }
         }
@@ -277,24 +278,22 @@ impl PipelineRunner {
             .transcribe(&self.workspace, &audio_path, language, &output_prefix)
             .await?;
 
-        let mut segments = transcript.segments;
-        if should_correct_subtitles(&task.config_json) {
-            self.log(
-                task_id,
-                run_id,
-                app,
-                "info",
-                "Correcting subtitles with DeepSeek",
-            )
+        let segments = transcript.segments;
+        self.log(
+            task_id,
+            run_id,
+            app,
+            "info",
+            "Correcting transcript with DeepSeek",
+        )
+        .await?;
+        let deepseek = DeepSeekClient::new(self.repo.clone());
+        let output = deepseek
+            .correct_transcript(&segments, &transcript_target_language(&task.config_json))
             .await?;
-            let deepseek = DeepSeekClient::new(self.repo.clone());
-            let output = deepseek
-                .correct_subtitles(&segments, &subtitle_target_language(&task.config_json))
-                .await?;
-            segments = output.value;
-            self.record_deepseek_usage(task_id, run_id, output.usage)
-                .await?;
-        }
+        let segments = output.value;
+        self.record_deepseek_usage(task_id, run_id, output.usage)
+            .await?;
 
         let segment_count = segments.len();
         let duration_secs = segments
@@ -302,20 +301,20 @@ impl PipelineRunner {
             .map(|segment| segment.end_ms as f64 / 1000.0)
             .unwrap_or(0.0);
 
-        let subtitle_path = self.assets.subtitle_path(task_id);
-        let subtitle_json = segments_to_json(&segments);
+        let transcript_path = self.assets.transcript_path(task_id);
+        let transcript_json = segments_to_json(&segments);
         self.assets
-            .write_subtitle_json(&subtitle_path, &subtitle_json)
+            .write_transcript_json(&transcript_path, &transcript_json)
             .await?;
-        let subtitle = asset_for_path(
+        let transcript_asset = asset_for_path(
             task_id,
             run_id,
-            AssetType::Subtitle,
-            subtitle_path,
+            AssetType::Transcript,
+            transcript_path,
             "application/json",
             None,
         );
-        self.repo.insert_asset(&subtitle).await?;
+        self.repo.insert_asset(&transcript_asset).await?;
         self.record_usage(
             task_id,
             run_id,
@@ -454,8 +453,8 @@ impl PipelineRunner {
         )
         .await?;
 
-        let subtitle_path = self.assets.subtitle_path(task_id);
-        let segments = read_segments_from_json(&subtitle_path).await?;
+        let transcript_path = self.assets.transcript_path(task_id);
+        let segments = read_segments_from_json(&transcript_path).await?;
         let transcript = transcript_text(&segments);
         let tone = task
             .config_json
@@ -985,7 +984,6 @@ impl PipelineRunner {
         task_id: &str,
         run_id: &str,
         app: &AppHandle,
-        task: &Task,
         scene_count: i32,
     ) -> AppResult<()> {
         self.begin_stage(run_id, &StageType::FinalRender, app)
@@ -1036,8 +1034,8 @@ impl PipelineRunner {
             };
             let scenes = self.scenes_for_run(task_id, run_id).await?;
 
-            // With narration, subtitles and audio follow the raw ttsDurationMs
-            // timeline; each segment must match it or the tracks drift apart.
+            // With narration, audio follows the raw ttsDurationMs timeline; each
+            // segment must match it or the tracks drift apart.
             let concat_inputs = if audio.is_some() {
                 self.log(
                     task_id,
@@ -1074,33 +1072,11 @@ impl PipelineRunner {
                 .concat_segments(&concat_inputs, &concat_path)
                 .await?;
 
-            let video_size = self.ffmpeg.probe_video_size(&concat_path).await.ok();
-            let cues = cues_from_scenes_with_tts(&scenes);
-            let ass_path = workdir.join("subs.ass");
-            build_ass(
-                &cues,
-                &ass_path,
-                &ass_style_from_config(&task.config_json),
-                video_size,
-            )
-            .await?;
-
-            self.log(
-                task_id,
-                run_id,
-                app,
-                "info",
-                "Muxing TTS audio + burning subtitles",
-            )
-            .await?;
+            self.log(task_id, run_id, app, "info", "Muxing narration audio")
+                .await?;
             let rendered_path = workdir.join("rendered.mp4");
             self.ffmpeg
-                .render_final(
-                    &concat_path,
-                    &rendered_path,
-                    audio.as_deref(),
-                    Some(&ass_path),
-                )
+                .render_final(&concat_path, &rendered_path, audio.as_deref())
                 .await?;
             self.assets.copy_file(&rendered_path, &final_path).await?;
             Ok::<(), AppError>(())
@@ -1305,20 +1281,20 @@ impl PipelineRunner {
         );
         self.repo.insert_asset(&audio).await?;
 
-        let subtitle_path = self.assets.subtitle_path(task_id);
+        let transcript_path = self.assets.transcript_path(task_id);
         let segments = mock_transcript_segments();
         self.assets
-            .write_subtitle_json(&subtitle_path, &segments)
+            .write_transcript_json(&transcript_path, &segments)
             .await?;
-        let subtitle = asset_for_path(
+        let transcript_asset = asset_for_path(
             task_id,
             run_id,
-            AssetType::Subtitle,
-            subtitle_path,
+            AssetType::Transcript,
+            transcript_path,
             "application/json",
             None,
         );
-        self.repo.insert_asset(&subtitle).await?;
+        self.repo.insert_asset(&transcript_asset).await?;
         self.record_usage(
             task_id,
             run_id,
@@ -1685,7 +1661,7 @@ impl PipelineRunner {
                 .ok_or_else(|| AppError::Workflow(format!("task not found: {task_id}")))?;
             let scene_count = scene_count_from_config(&task.config_json, task.task_type);
             return self
-                .real_render_stage(task_id, run_id, app, &task, scene_count)
+                .real_render_stage(task_id, run_id, app, scene_count)
                 .await;
         }
 
@@ -1898,7 +1874,7 @@ fn run_stopped_error(run_id: &str) -> AppError {
 }
 
 fn transcript_outputs_ready(assets: &AssetManager, task_id: &str) -> bool {
-    assets.audio_path(task_id).exists() && assets.subtitle_path(task_id).exists()
+    assets.audio_path(task_id).exists() && assets.transcript_path(task_id).exists()
 }
 
 fn rewrite_files_ready(assets: &AssetManager, task_id: &str, scene_count: i32) -> bool {
@@ -1907,7 +1883,7 @@ fn rewrite_files_ready(assets: &AssetManager, task_id: &str, scene_count: i32) -
             return false;
         }
     }
-    assets.subtitle_path(task_id).exists()
+    assets.transcript_path(task_id).exists()
 }
 
 fn scene_count_from_config(config: &serde_json::Value, task_type: WorkflowTaskType) -> i32 {
@@ -1998,15 +1974,7 @@ fn tts_outputs_ready(assets: &AssetManager, task_id: &str, scene_count: i32) -> 
     true
 }
 
-fn should_correct_subtitles(config: &serde_json::Value) -> bool {
-    config
-        .get("subtitleSource")
-        .and_then(|value| value.as_str())
-        .unwrap_or("corrected_asr")
-        == "corrected_asr"
-}
-
-fn subtitle_target_language(config: &serde_json::Value) -> String {
+fn transcript_target_language(config: &serde_json::Value) -> String {
     if config.get("language").and_then(|value| value.as_str()) == Some("en") {
         "English".to_string()
     } else {
@@ -2081,7 +2049,8 @@ fn scene_duration_secs(scene: &Scene) -> f64 {
         .and_then(|value| value.as_i64())
         .filter(|value| *value > 0)
     {
-        return (duration_ms as f64 / 1000.0).clamp(3.0, 10.0);
+        return (duration_ms as f64 / 1000.0)
+            .clamp(SEEDANCE_MIN_DURATION_SECS, SEEDANCE_MAX_DURATION_SECS);
     }
     scene
         .metadata_json
@@ -2089,9 +2058,12 @@ fn scene_duration_secs(scene: &Scene) -> f64 {
         .and_then(|metadata| {
             let start = metadata.get("startMs")?.as_i64()?;
             let end = metadata.get("endMs")?.as_i64()?;
-            Some(((end - start) as f64 / 1000.0).clamp(3.0, 10.0))
+            Some(
+                ((end - start) as f64 / 1000.0)
+                    .clamp(SEEDANCE_MIN_DURATION_SECS, SEEDANCE_MAX_DURATION_SECS),
+            )
         })
-        .unwrap_or(5.0)
+        .unwrap_or(SEEDANCE_DEFAULT_DURATION_SECS)
 }
 
 fn generated_segment_usage_seconds(duration_secs: f64) -> AppResult<f64> {
@@ -2182,8 +2154,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_narration_secs_matches_subtitle_timeline() {
-        // Raw ttsDurationMs, unclamped — must mirror cues_from_scenes_with_tts.
+    fn scene_narration_secs_uses_raw_tts_timeline() {
         assert_eq!(
             scene_narration_secs(&scene_with_metadata(Some(
                 serde_json::json!({"ttsDurationMs": 12000})
@@ -2196,6 +2167,38 @@ mod tests {
                 serde_json::json!({"ttsDurationMs": 0})
             ))),
             3.0
+        );
+    }
+
+    #[test]
+    fn scene_duration_secs_uses_seedance_compatible_bounds() {
+        assert_eq!(
+            scene_duration_secs(&scene_with_metadata(Some(
+                serde_json::json!({"ttsDurationMs": 3000})
+            ))),
+            SEEDANCE_MIN_DURATION_SECS
+        );
+        assert_eq!(
+            scene_duration_secs(&scene_with_metadata(Some(
+                serde_json::json!({"startMs": 1000, "endMs": 3500})
+            ))),
+            SEEDANCE_MIN_DURATION_SECS
+        );
+        assert_eq!(
+            scene_duration_secs(&scene_with_metadata(Some(
+                serde_json::json!({"ttsDurationMs": 5500})
+            ))),
+            5.5
+        );
+        assert_eq!(
+            scene_duration_secs(&scene_with_metadata(Some(
+                serde_json::json!({"ttsDurationMs": 12000})
+            ))),
+            SEEDANCE_MAX_DURATION_SECS
+        );
+        assert_eq!(
+            scene_duration_secs(&scene_with_metadata(None)),
+            SEEDANCE_DEFAULT_DURATION_SECS
         );
     }
 
@@ -2239,7 +2242,7 @@ mod tests {
             .unwrap();
         runner
             .assets
-            .write_subtitle_json(&runner.assets.subtitle_path(&task_id), &json!([]))
+            .write_transcript_json(&runner.assets.transcript_path(&task_id), &json!([]))
             .await
             .unwrap();
 

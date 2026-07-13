@@ -1,18 +1,49 @@
+use std::future::Future;
 use std::time::Duration;
 
-use reqwest::{Client, Url};
+use reqwest::{Client, ClientBuilder, Url};
 
 use crate::errors::{AppError, AppResult};
 
-/// HTTP client that always connects directly (no proxy).
+/// HTTP client that respects the system and environment proxy configuration.
 pub fn build_http_client(timeout_secs: u64) -> AppResult<Client> {
+    finish_client(client_builder(timeout_secs))
+}
+
+/// HTTP client for domestic providers that must bypass configured proxies.
+pub fn build_http_client_direct(timeout_secs: u64) -> AppResult<Client> {
+    finish_client(client_builder(timeout_secs).no_proxy())
+}
+
+fn client_builder(timeout_secs: u64) -> ClientBuilder {
     Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .connect_timeout(Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::limited(10))
-        .no_proxy()
+}
+
+fn finish_client(builder: ClientBuilder) -> AppResult<Client> {
+    builder
         .build()
         .map_err(|error| AppError::Provider(error.to_string()))
+}
+
+pub async fn retry_connect_once<T, F, Fut>(delay: Duration, mut operation: F) -> reqwest::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = reqwest::Result<T>>,
+{
+    match operation().await {
+        Err(error) if error.is_connect() => {
+            tracing::warn!(
+                delay_ms = delay.as_millis(),
+                "provider connection failed, retrying once"
+            );
+            tokio::time::sleep(delay).await;
+            operation().await
+        }
+        result => result,
+    }
 }
 
 pub fn is_transient_provider_error(message: &str) -> bool {
@@ -74,13 +105,72 @@ fn redact_parsed_url(mut url: Url) -> String {
 mod tests {
     use std::io::Read;
     use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
 
     use super::*;
 
     #[test]
-    fn build_http_client_succeeds() {
+    fn build_http_clients_succeed() {
         build_http_client(5).expect("client should build");
+        build_http_client_direct(5).expect("direct client should build");
+    }
+
+    #[tokio::test]
+    async fn retries_connect_errors_once() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let client = Client::builder()
+            .timeout(Duration::from_secs(1))
+            .connect_timeout(Duration::from_millis(100))
+            .no_proxy()
+            .build()
+            .unwrap();
+        let attempts = AtomicUsize::new(0);
+
+        let error = retry_connect_once(Duration::ZERO, || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            client.get(format!("http://{address}")).send()
+        })
+        .await
+        .unwrap_err();
+
+        assert!(
+            error.is_connect(),
+            "expected connect error, got {error:?}; timeout={}",
+            error.is_timeout()
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_response_timeouts() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request);
+            thread::sleep(Duration::from_millis(200));
+        });
+        let client = Client::builder()
+            .timeout(Duration::from_millis(25))
+            .no_proxy()
+            .build()
+            .unwrap();
+        let attempts = AtomicUsize::new(0);
+
+        let error = retry_connect_once(Duration::ZERO, || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            client.get(format!("http://{address}")).send()
+        })
+        .await
+        .unwrap_err();
+
+        assert!(error.is_timeout());
+        assert!(!error.is_connect());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
     #[test]

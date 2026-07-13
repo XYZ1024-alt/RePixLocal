@@ -222,11 +222,11 @@ fn segment_text(
 }
 
 fn submit_http_client() -> AppResult<reqwest::Client> {
-    crate::providers::http_client::build_http_client(SUBMIT_TIMEOUT_SECS)
+    crate::providers::http_client::build_http_client_direct(SUBMIT_TIMEOUT_SECS)
 }
 
 fn poll_http_client() -> AppResult<reqwest::Client> {
-    crate::providers::http_client::build_http_client(POLL_REQUEST_TIMEOUT_SECS)
+    crate::providers::http_client::build_http_client_direct(POLL_REQUEST_TIMEOUT_SECS)
 }
 
 async fn retry_transient<T, F, Fut>(attempts: usize, mut operation: F) -> AppResult<T>

@@ -102,7 +102,7 @@ fn task_dirs(task_root: PathBuf) -> Vec<PathBuf> {
         "keyframes",
         "frames",
         "segments",
-        "subtitles",
+        "transcript",
         "final",
     ]
     .into_iter()

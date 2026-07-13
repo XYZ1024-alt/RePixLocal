@@ -20,7 +20,22 @@ function Get-FileSha256 {
         [string]$Path
     )
 
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToUpperInvariant()
+    # Some runner-hosted Windows PowerShell environments do not expose Get-FileHash.
+    $File = Get-Item -LiteralPath $Path -ErrorAction Stop
+    $Stream = [System.IO.File]::OpenRead($File.FullName)
+    try {
+        $Sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $HashBytes = $Sha256.ComputeHash($Stream)
+            return ([System.BitConverter]::ToString($HashBytes)).Replace("-", "")
+        }
+        finally {
+            $Sha256.Dispose()
+        }
+    }
+    finally {
+        $Stream.Dispose()
+    }
 }
 
 function Assert-FileSha256 {

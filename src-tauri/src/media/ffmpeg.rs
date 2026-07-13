@@ -375,54 +375,6 @@ impl FfmpegRunner {
             .ok_or_else(|| AppError::Workflow("ffprobe returned no duration".into()))
     }
 
-    pub async fn probe_video_size(&self, path: &Path) -> AppResult<(i32, i32)> {
-        let ffprobe = self.ffprobe_path().await?;
-        let output = Command::new(&ffprobe)
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=width,height",
-                "-of",
-                "json",
-                &path_arg(path),
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .map_err(AppError::from)?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AppError::Workflow(format!(
-                "ffprobe size probe failed: {}",
-                stderr.trim()
-            )));
-        }
-        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-        let stream = parsed
-            .get("streams")
-            .and_then(|value| value.as_array())
-            .and_then(|streams| streams.first())
-            .ok_or_else(|| AppError::Workflow("ffprobe returned no video stream".into()))?;
-        let width = stream
-            .get("width")
-            .and_then(|value| value.as_i64())
-            .filter(|value| *value > 0)
-            .ok_or_else(|| AppError::Workflow("ffprobe returned no video width".into()))?
-            as i32;
-        let height = stream
-            .get("height")
-            .and_then(|value| value.as_i64())
-            .filter(|value| *value > 0)
-            .ok_or_else(|| AppError::Workflow("ffprobe returned no video height".into()))?
-            as i32;
-        Ok((width, height))
-    }
-
     pub async fn extract_frames(
         &self,
         video_path: &Path,
@@ -460,7 +412,6 @@ impl FfmpegRunner {
         video_path: &Path,
         out_path: &Path,
         audio_path: Option<&Path>,
-        subtitle_ass: Option<&Path>,
     ) -> AppResult<()> {
         if let Some(parent) = out_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -484,13 +435,6 @@ impl FfmpegRunner {
                 ));
             }
         }
-        if let Some(ass_path) = subtitle_ass {
-            vf_parts.push(format!(
-                "subtitles='{}'",
-                escape_subtitles_filter_path(ass_path)
-            ));
-        }
-
         if !vf_parts.is_empty() {
             args.push("-vf".to_string());
             args.push(vf_parts.join(","));
@@ -570,12 +514,6 @@ impl FfmpegRunner {
 
 fn path_arg(path: &Path) -> String {
     path.to_string_lossy().to_string()
-}
-
-fn escape_subtitles_filter_path(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('\\', "/")
-        .replace(':', "\\:")
 }
 
 fn tool_check(
