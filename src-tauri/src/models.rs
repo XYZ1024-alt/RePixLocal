@@ -305,6 +305,14 @@ pub struct WhisperModelStatus {
 pub struct ProviderModelOption {
     pub id: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_capabilities: Option<VideoModelCapabilities>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoModelCapabilities {
+    pub resolutions: Vec<String>,
+    pub default_resolution: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -252,6 +252,12 @@ export type SubmitTaskResponse = {
 export type ProviderModelOption = {
   id: string;
   name: string;
+  video_capabilities?: VideoModelCapabilities;
+};
+
+export type VideoModelCapabilities = {
+  resolutions: string[];
+  default_resolution: string;
 };
 
 export type ProviderCredentialConfig = {

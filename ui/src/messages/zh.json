@@ -250,11 +250,17 @@
     "pipelineOptions": "流水线选项",
     "pipelineOptionsDesc": "配置复刻视频的改写与渲染方式。",
     "resolution": "分辨率",
+    "videoModel": "视频模型",
+    "videoModelRequired": "请选择视频模型。",
+    "videoModelCapabilitiesUnavailable": "当前视频模型缺少能力定义。",
+    "resolutionUnsupported": "当前模型不支持所选分辨率。",
+    "capabilitiesUnavailable": "能力未知",
     "aspectRatio": "宽高比",
     "language": "目标语言",
     "rewriteTone": "改写语气",
     "rewriteLength": "改写长度",
     "voice": "配音声音",
+    "narrativeSource": "复刻文案来源",
     "sceneCount": "场景数量",
     "sourceSubtitleTreatment": "原字幕处理",
     "sourceSubtitleRegionRatio": "原字幕区域高度（%）",
@@ -304,10 +310,6 @@
       "pending": "待处理"
     },
     "options": {
-      "resolution": {
-        "720p": "720p",
-        "1080p": "1080p"
-      },
       "aspectRatio": {
         "16:9": "16:9",
         "9:16": "9:16"
@@ -331,6 +333,11 @@
         "female-1": "女声 1",
         "male-1": "男声 1",
         "narrator": "旁白"
+      },
+      "narrativeSource": {
+        "auto": "自动判断",
+        "audio_transcript": "音频转写",
+        "on_screen_text": "画面字幕"
       },
       "sourceSubtitleTreatment": {
         "blur": "模糊弱化",

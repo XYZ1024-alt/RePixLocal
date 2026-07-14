@@ -16,12 +16,16 @@ use crate::media::transcript::{read_segments_from_json, segments_to_json, transc
 use crate::media::whisper::WhisperRunner;
 use crate::models::{AssetType, Scene, StageType, Task, WorkflowTaskType};
 use crate::providers::cosyvoice::CosyVoiceClient;
-use crate::providers::deepseek::{DeepSeekClient, DeepSeekUsage};
+use crate::providers::deepseek::{
+    DeepSeekClient, DeepSeekUsage, NarrativeSelectionInput, NarrativeSource,
+    NarrativeSourceDecision, RewriteScriptInput,
+};
 use crate::providers::fetch::{download_to_file, DownloadKind};
 use crate::providers::http_client::is_transient_provider_error;
-use crate::providers::qwen_vl::QwenVlClient;
-use crate::providers::seedance::{SeedanceClient, SegmentPollStatus};
+use crate::providers::qwen_vl::{FrameAnalysisResult, QwenVlClient};
+use crate::providers::seedance::{SeedanceClient, SegmentPollStatus, SegmentSubmitInput};
 use crate::providers::tongyi::TongyiClient;
+use crate::providers::video_capabilities;
 use crate::storage::local_assets::{asset_for_path, mock_transcript_segments, AssetManager};
 
 use crate::workflow::events::{emit_pipeline_event, PipelineEvent};
@@ -49,6 +53,52 @@ struct UsageLog<'a> {
     unit: &'a str,
     quantity: f64,
     cost_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NarrativeSourcePreference {
+    Auto,
+    AudioTranscript,
+    OnScreenText,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedNarrative {
+    source: NarrativeSource,
+    text: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NarrativeCandidates<'a> {
+    audio_transcript: &'a str,
+    on_screen_texts: &'a [Option<String>],
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RewriteFrameInput<'a> {
+    task_id: &'a str,
+    run_id: &'a str,
+    app: &'a AppHandle,
+    source_video: &'a std::path::Path,
+    scene_count: i32,
+    subtitle_region_ratio: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedRewriteFrames {
+    analysis: FrameAnalysisResult,
+    keyframe_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TaskNarrativeInput<'a> {
+    task_id: &'a str,
+    run_id: &'a str,
+    app: &'a AppHandle,
+    preference: NarrativeSourcePreference,
+    transcript: &'a str,
+    on_screen_texts: &'a [Option<String>],
 }
 
 impl PipelineRunner {
@@ -278,22 +328,36 @@ impl PipelineRunner {
             .transcribe(&self.workspace, &audio_path, language, &output_prefix)
             .await?;
 
-        let segments = transcript.segments;
-        self.log(
-            task_id,
-            run_id,
-            app,
-            "info",
-            "Correcting transcript with DeepSeek",
-        )
-        .await?;
-        let deepseek = DeepSeekClient::new(self.repo.clone());
-        let output = deepseek
-            .correct_transcript(&segments, &transcript_target_language(&task.config_json))
+        let segments = if transcript.segments.is_empty() {
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "warn",
+                "Whisper found no transcript; continuing with an empty audio transcript",
+            )
             .await?;
-        let segments = output.value;
-        self.record_deepseek_usage(task_id, run_id, output.usage)
+            Vec::new()
+        } else {
+            self.log(
+                task_id,
+                run_id,
+                app,
+                "info",
+                "Correcting transcript with DeepSeek",
+            )
             .await?;
+            let deepseek = DeepSeekClient::new(self.repo.clone());
+            let output = deepseek
+                .correct_transcript(
+                    &transcript.segments,
+                    &transcript_target_language(&task.config_json),
+                )
+                .await?;
+            self.record_deepseek_usage(task_id, run_id, output.usage)
+                .await?;
+            output.value
+        };
 
         let segment_count = segments.len();
         let duration_secs = segments
@@ -371,91 +435,33 @@ impl PipelineRunner {
                 .await;
         }
 
-        self.log(
-            task_id,
-            run_id,
-            app,
-            "info",
-            &format!("Extracting {scene_count} keyframes from source video"),
-        )
-        .await?;
-        let keyframe_dir = self.workspace.task_dir(task_id).join("keyframes");
+        let source_preference = narrative_source_preference(&task.config_json)?;
         let subtitle_region_ratio = keyframe_subtitle_region_ratio(&task.config_json)?;
-        if subtitle_region_ratio.is_some() {
-            self.log(
+        let prepared = self
+            .prepare_rewrite_frames(RewriteFrameInput {
                 task_id,
                 run_id,
                 app,
-                "info",
-                &format!(
-                    "Blurring bottom {:.0}% subtitle region",
-                    subtitle_region_ratio.unwrap_or(DEFAULT_SUBTITLE_REGION_RATIO) * 100.0
-                ),
-            )
-            .await?;
-        }
-        let frame_paths = extract_keyframes(
-            &self.ffmpeg,
-            source_video,
-            &keyframe_dir,
-            scene_count,
-            KeyframeOptions {
+                source_video,
+                scene_count,
                 subtitle_region_ratio,
-            },
-        )
-        .await?;
-
-        let mut keyframe_paths = Vec::with_capacity(frame_paths.len());
-        for (index, frame_path) in frame_paths.iter().enumerate() {
-            let keyframe = asset_for_path(
-                task_id,
-                run_id,
-                AssetType::Keyframe,
-                frame_path.clone(),
-                "image/png",
-                Some(index as i32),
-            );
-            self.repo.insert_asset(&keyframe).await?;
-            keyframe_paths.push(frame_path.to_string_lossy().to_string());
-            self.log(
-                task_id,
-                run_id,
-                app,
-                "info",
-                &format!("Keyframe {index} extracted"),
-            )
+            })
             .await?;
-        }
-
-        self.log(
-            task_id,
-            run_id,
-            app,
-            "info",
-            &format!(
-                "Analyzing video sequence ({} frames) with Qwen-VL",
-                keyframe_paths.len()
-            ),
-        )
-        .await?;
-        let qwen = QwenVlClient::new(self.repo.clone());
-        let analysis = qwen.analyze_video_frames(&frame_paths).await?;
-        self.record_usage(
-            task_id,
-            run_id,
-            UsageLog {
-                provider: "QWEN_VL",
-                endpoint: "multimodal-generation/generation",
-                unit: "tokens",
-                quantity: analysis.usage.total_tokens as f64,
-                cost_usd: None,
-            },
-        )
-        .await?;
 
         let transcript_path = self.assets.transcript_path(task_id);
         let segments = read_segments_from_json(&transcript_path).await?;
         let transcript = transcript_text(&segments);
+        let selected = self
+            .select_task_narrative(TaskNarrativeInput {
+                task_id,
+                run_id,
+                app,
+                preference: source_preference,
+                transcript: &transcript,
+                on_screen_texts: &prepared.analysis.on_screen_texts,
+            })
+            .await?;
+
         let tone = task
             .config_json
             .get("rewriteTone")
@@ -471,13 +477,13 @@ impl PipelineRunner {
         .await?;
         let deepseek = DeepSeekClient::new(self.repo.clone());
         let output = deepseek
-            .rewrite_script_with_visuals(
-                &transcript,
-                &analysis.descriptions,
-                &keyframe_paths,
+            .rewrite_script_with_visuals(RewriteScriptInput {
+                narrative_text: &selected.text,
+                visual_descriptions: &prepared.analysis.descriptions,
+                keyframe_paths: &prepared.keyframe_paths,
                 tone,
-                scene_count,
-            )
+                target_scenes: scene_count,
+            })
             .await?;
         self.record_deepseek_usage(task_id, run_id, output.usage)
             .await?;
@@ -489,6 +495,8 @@ impl PipelineRunner {
                 "keyframePath": scene.keyframe_path,
                 "startMs": scene.start_ms,
                 "endMs": scene.end_ms,
+                "narrativeSource": selected.source.as_str(),
+                "narrativeSourceReason": selected.reason.as_str(),
             }));
             self.repo
                 .insert_scene(&Scene {
@@ -507,6 +515,207 @@ impl PipelineRunner {
 
         self.complete_stage(run_id, &StageType::ScriptRewrite, app)
             .await
+    }
+
+    async fn prepare_rewrite_frames(
+        &self,
+        input: RewriteFrameInput<'_>,
+    ) -> AppResult<PreparedRewriteFrames> {
+        let keyframe_dir = self.workspace.task_dir(input.task_id).join("keyframes");
+        self.log(
+            input.task_id,
+            input.run_id,
+            input.app,
+            "info",
+            &format!(
+                "Extracting {} raw keyframes for visual text analysis",
+                input.scene_count
+            ),
+        )
+        .await?;
+        let raw_frame_paths = extract_keyframes(
+            &self.ffmpeg,
+            input.source_video,
+            &keyframe_dir,
+            input.scene_count,
+            KeyframeOptions {
+                subtitle_region_ratio: None,
+            },
+        )
+        .await?;
+
+        self.log(
+            input.task_id,
+            input.run_id,
+            input.app,
+            "info",
+            &format!(
+                "Analyzing video sequence and on-screen text ({} frames) with Qwen-VL",
+                raw_frame_paths.len()
+            ),
+        )
+        .await?;
+        let qwen = QwenVlClient::new(self.repo.clone());
+        let analysis = qwen.analyze_video_frames(&raw_frame_paths).await?;
+        self.record_usage(
+            input.task_id,
+            input.run_id,
+            UsageLog {
+                provider: "QWEN_VL",
+                endpoint: "multimodal-generation/generation",
+                unit: "tokens",
+                quantity: analysis.usage.total_tokens as f64,
+                cost_usd: None,
+            },
+        )
+        .await?;
+
+        let frame_paths = self
+            .prepare_storyboard_keyframes(input, &keyframe_dir, raw_frame_paths)
+            .await?;
+        let mut keyframe_paths = Vec::with_capacity(frame_paths.len());
+        for (index, frame_path) in frame_paths.iter().enumerate() {
+            let keyframe = asset_for_path(
+                input.task_id,
+                input.run_id,
+                AssetType::Keyframe,
+                frame_path.clone(),
+                "image/png",
+                Some(index as i32),
+            );
+            self.repo.insert_asset(&keyframe).await?;
+            keyframe_paths.push(frame_path.to_string_lossy().to_string());
+            self.log(
+                input.task_id,
+                input.run_id,
+                input.app,
+                "info",
+                &format!("Keyframe {index} ready"),
+            )
+            .await?;
+        }
+        Ok(PreparedRewriteFrames {
+            analysis,
+            keyframe_paths,
+        })
+    }
+
+    async fn prepare_storyboard_keyframes(
+        &self,
+        input: RewriteFrameInput<'_>,
+        keyframe_dir: &std::path::Path,
+        raw_frame_paths: Vec<std::path::PathBuf>,
+    ) -> AppResult<Vec<std::path::PathBuf>> {
+        let Some(ratio) = input.subtitle_region_ratio else {
+            return Ok(raw_frame_paths);
+        };
+        self.log(
+            input.task_id,
+            input.run_id,
+            input.app,
+            "info",
+            &format!(
+                "Blurring bottom {:.0}% subtitle region for storyboard keyframes",
+                ratio * 100.0
+            ),
+        )
+        .await?;
+        extract_keyframes(
+            &self.ffmpeg,
+            input.source_video,
+            keyframe_dir,
+            input.scene_count,
+            KeyframeOptions {
+                subtitle_region_ratio: Some(ratio),
+            },
+        )
+        .await
+    }
+
+    async fn select_task_narrative(
+        &self,
+        input: TaskNarrativeInput<'_>,
+    ) -> AppResult<SelectedNarrative> {
+        let candidates = NarrativeCandidates {
+            audio_transcript: input.transcript,
+            on_screen_texts: input.on_screen_texts,
+        };
+        let selected = match input.preference {
+            NarrativeSourcePreference::Auto => {
+                self.select_automatic_narrative(input, candidates).await?
+            }
+            NarrativeSourcePreference::AudioTranscript => select_narrative(
+                NarrativeSource::AudioTranscript,
+                candidates,
+                "forced by task configuration",
+            )?,
+            NarrativeSourcePreference::OnScreenText => select_narrative(
+                NarrativeSource::OnScreenText,
+                candidates,
+                "forced by task configuration",
+            )?,
+        };
+        self.log(
+            input.task_id,
+            input.run_id,
+            input.app,
+            "info",
+            &format!(
+                "Narrative source selected: {} ({})",
+                selected.source.as_str(),
+                selected.reason
+            ),
+        )
+        .await?;
+        Ok(selected)
+    }
+
+    async fn select_automatic_narrative(
+        &self,
+        input: TaskNarrativeInput<'_>,
+        candidates: NarrativeCandidates<'_>,
+    ) -> AppResult<SelectedNarrative> {
+        if input.transcript.trim().is_empty() && !has_on_screen_text(input.on_screen_texts) {
+            return Err(AppError::Workflow(
+                "no audio transcript or information-bearing on-screen text was found".into(),
+            ));
+        }
+        self.log(
+            input.task_id,
+            input.run_id,
+            input.app,
+            "info",
+            "Selecting narrative source with DeepSeek",
+        )
+        .await?;
+        let deepseek = DeepSeekClient::new(self.repo.clone());
+        let output = deepseek
+            .select_narrative_source(NarrativeSelectionInput {
+                audio_transcript: input.transcript,
+                on_screen_texts: input.on_screen_texts,
+            })
+            .await?;
+        self.record_deepseek_usage(input.task_id, input.run_id, output.usage)
+            .await?;
+        match output.value {
+            NarrativeSourceDecision::Selected { source, reason } => {
+                select_narrative(source, candidates, &reason)
+            }
+            NarrativeSourceDecision::Ambiguous { reason } => {
+                let reason = compact_reason(&reason);
+                self.log(
+                    input.task_id,
+                    input.run_id,
+                    input.app,
+                    "warn",
+                    &format!("Narrative source is ambiguous: {reason}"),
+                )
+                .await?;
+                Err(AppError::Workflow(format!(
+                    "narrative source is ambiguous: {reason}; choose Audio transcript or On-screen text in advanced options"
+                )))
+            }
+        }
     }
 
     async fn real_storyboard_stage(
@@ -857,7 +1066,7 @@ impl PipelineRunner {
         self.begin_stage(run_id, &StageType::SegmentGeneration, app)
             .await?;
         let seedance = SeedanceClient::new(self.repo.clone());
-        let resolution = resolution_from_config(&task.config_json);
+        let video = video_capabilities::selection_from_config(&task.config_json)?;
         let scenes = self.scenes_for_run(task_id, run_id).await?;
 
         for index in 0..scene_count {
@@ -906,7 +1115,13 @@ impl PipelineRunner {
                 )
                 .await?;
                 let job_id = seedance
-                    .submit_segment(&frame_path, duration_sec, motion, resolution.as_deref())
+                    .submit_segment(SegmentSubmitInput {
+                        frame_path: &frame_path,
+                        duration_sec,
+                        motion_prompt: motion,
+                        model: &video.model,
+                        resolution: &video.resolution,
+                    })
                     .await?;
                 let mut metadata = scene.metadata_json.clone().unwrap_or_else(|| json!({}));
                 if let Some(object) = metadata.as_object_mut() {
@@ -1368,6 +1583,29 @@ impl PipelineRunner {
             .get("rewriteTone")
             .and_then(|value| value.as_str())
             .unwrap_or("faithful");
+        let source_preference = narrative_source_preference(&task.config_json)?;
+        let narrative_source = match source_preference {
+            NarrativeSourcePreference::OnScreenText => NarrativeSource::OnScreenText,
+            NarrativeSourcePreference::Auto | NarrativeSourcePreference::AudioTranscript => {
+                NarrativeSource::AudioTranscript
+            }
+        };
+        let narrative_reason = if source_preference == NarrativeSourcePreference::Auto {
+            "mock automatic decision"
+        } else {
+            "forced by task configuration"
+        };
+        self.log(
+            task_id,
+            run_id,
+            app,
+            "info",
+            &format!(
+                "Narrative source selected: {} ({narrative_reason})",
+                narrative_source.as_str()
+            ),
+        )
+        .await?;
         self.log(
             task_id,
             run_id,
@@ -1387,8 +1625,9 @@ impl PipelineRunner {
                 run_id: Some(run_id.to_string()),
                 scene_index: index,
                 script_text: format!(
-                    "[{tone}] Rewritten scene {} based on the source narration.",
-                    index + 1
+                    "[{tone}] Rewritten scene {} based on {}.",
+                    index + 1,
+                    narrative_source.as_str()
                 ),
                 visual_prompt: Some(format!("Enhanced: {visual}")),
                 motion_prompt: Some("slow zoom in".to_string()),
@@ -1396,6 +1635,8 @@ impl PipelineRunner {
                     "keyframeIndex": index,
                     "startMs": index * 3000,
                     "endMs": (index + 1) * 3000,
+                    "narrativeSource": narrative_source.as_str(),
+                    "narrativeSourceReason": narrative_reason,
                 })),
                 created_at: Utc::now(),
             };
@@ -1910,15 +2151,6 @@ fn img2img_strength_for_tone(tone: &str) -> f64 {
     }
 }
 
-fn resolution_from_config(config: &serde_json::Value) -> Option<String> {
-    config
-        .get("resolution")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
 fn requirements_from_config(config: &serde_json::Value) -> AppResult<String> {
     config
         .get("requirements")
@@ -1942,11 +2174,12 @@ fn validate_scene_indices(
     scenes: &[crate::models::RewrittenScene],
     expected_count: i32,
 ) -> AppResult<()> {
-    if scene_indices_complete(scenes.iter().map(|scene| scene.index), expected_count) {
+    let indices: Vec<i32> = scenes.iter().map(|scene| scene.index).collect();
+    if scene_indices_complete(indices.iter().copied(), expected_count) {
         return Ok(());
     }
     Err(AppError::Provider(format!(
-        "provider returned incomplete scene indices; expected exactly 0..{}",
+        "provider returned scene indices {indices:?}; expected exactly 0..{}",
         expected_count.saturating_sub(1)
     )))
 }
@@ -1972,6 +2205,76 @@ fn tts_outputs_ready(assets: &AssetManager, task_id: &str, scene_count: i32) -> 
         }
     }
     true
+}
+
+fn narrative_source_preference(config: &Value) -> AppResult<NarrativeSourcePreference> {
+    let Some(value) = config.get("narrativeSource") else {
+        return Ok(NarrativeSourcePreference::AudioTranscript);
+    };
+    let value = value.as_str().ok_or_else(|| {
+        AppError::Workflow("narrativeSource must be a string when provided".into())
+    })?;
+    match value {
+        "auto" => Ok(NarrativeSourcePreference::Auto),
+        "audio_transcript" => Ok(NarrativeSourcePreference::AudioTranscript),
+        "on_screen_text" => Ok(NarrativeSourcePreference::OnScreenText),
+        _ => Err(AppError::Workflow(format!(
+            "unsupported narrativeSource: {value}"
+        ))),
+    }
+}
+
+fn has_on_screen_text(values: &[Option<String>]) -> bool {
+    values
+        .iter()
+        .flatten()
+        .any(|value| !value.trim().is_empty())
+}
+
+fn select_narrative(
+    source: NarrativeSource,
+    candidates: NarrativeCandidates<'_>,
+    reason: &str,
+) -> AppResult<SelectedNarrative> {
+    let text = match source {
+        NarrativeSource::AudioTranscript => candidates.audio_transcript.trim().to_string(),
+        NarrativeSource::OnScreenText => on_screen_narrative_text(candidates.on_screen_texts),
+    };
+    if text.is_empty() {
+        let message = match source {
+            NarrativeSource::AudioTranscript => {
+                "audio transcript is empty; choose Auto or On-screen text in advanced options"
+            }
+            NarrativeSource::OnScreenText => {
+                "no information-bearing on-screen text was found; choose Auto or Audio transcript in advanced options"
+            }
+        };
+        return Err(AppError::Workflow(message.into()));
+    }
+    Ok(SelectedNarrative {
+        source,
+        text,
+        reason: compact_reason(reason),
+    })
+}
+
+fn on_screen_narrative_text(values: &[Option<String>]) -> String {
+    values
+        .iter()
+        .enumerate()
+        .filter_map(|(scene_index, value)| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(|text| format!("Scene {scene_index}: {text}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn compact_reason(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn transcript_target_language(config: &serde_json::Value) -> String {
@@ -2109,16 +2412,98 @@ mod tests {
     }
 
     #[test]
-    fn resolution_from_config_reads_trimmed_string() {
+    fn narrative_source_config_defaults_legacy_tasks_to_audio() {
         assert_eq!(
-            resolution_from_config(&serde_json::json!({"resolution": "1080p"})),
-            Some("1080p".to_string())
+            narrative_source_preference(&serde_json::json!({})).unwrap(),
+            NarrativeSourcePreference::AudioTranscript
         );
         assert_eq!(
-            resolution_from_config(&serde_json::json!({"resolution": "  "})),
-            None
+            narrative_source_preference(&serde_json::json!({"narrativeSource": "auto"})).unwrap(),
+            NarrativeSourcePreference::Auto
         );
-        assert_eq!(resolution_from_config(&serde_json::json!({})), None);
+        assert_eq!(
+            narrative_source_preference(&serde_json::json!({"narrativeSource": "on_screen_text"}))
+                .unwrap(),
+            NarrativeSourcePreference::OnScreenText
+        );
+    }
+
+    #[test]
+    fn narrative_source_config_rejects_invalid_values() {
+        let unsupported =
+            narrative_source_preference(&serde_json::json!({"narrativeSource": "source_music"}))
+                .expect_err("unsupported source");
+        assert!(unsupported
+            .to_string()
+            .contains("unsupported narrativeSource"));
+
+        let wrong_type = narrative_source_preference(&serde_json::json!({"narrativeSource": 1}))
+            .expect_err("wrong type");
+        assert!(wrong_type.to_string().contains("must be a string"));
+    }
+
+    #[test]
+    fn on_screen_selection_excludes_audio_lyrics() {
+        let lyrics = "Moonlight follows me through the night";
+        let on_screen_texts = vec![
+            Some("Steam the sweet potatoes until tender".to_string()),
+            Some("The center should stay soft and moist".to_string()),
+        ];
+        let selected = select_narrative(
+            NarrativeSource::OnScreenText,
+            NarrativeCandidates {
+                audio_transcript: lyrics,
+                on_screen_texts: &on_screen_texts,
+            },
+            "The audio is a song",
+        )
+        .expect("select on-screen text");
+
+        assert_eq!(selected.source, NarrativeSource::OnScreenText);
+        assert!(selected.text.contains("Steam the sweet potatoes"));
+        assert!(!selected.text.contains(lyrics));
+    }
+
+    #[test]
+    fn audio_selection_excludes_on_screen_text() {
+        let on_screen_texts = vec![Some("Unrelated product caption".to_string())];
+        let selected = select_narrative(
+            NarrativeSource::AudioTranscript,
+            NarrativeCandidates {
+                audio_transcript: "Spoken product explanation",
+                on_screen_texts: &on_screen_texts,
+            },
+            "forced by task configuration",
+        )
+        .expect("select audio transcript");
+
+        assert_eq!(selected.text, "Spoken product explanation");
+        assert!(!selected.text.contains("Unrelated product caption"));
+    }
+
+    #[test]
+    fn forced_narrative_source_requires_non_empty_content() {
+        let no_text = vec![None, Some("   ".to_string())];
+        let candidates = NarrativeCandidates {
+            audio_transcript: "  ",
+            on_screen_texts: &no_text,
+        };
+
+        let audio = select_narrative(
+            NarrativeSource::AudioTranscript,
+            candidates,
+            "forced by task configuration",
+        )
+        .expect_err("empty audio transcript");
+        assert!(audio.to_string().contains("audio transcript is empty"));
+
+        let captions = select_narrative(
+            NarrativeSource::OnScreenText,
+            candidates,
+            "forced by task configuration",
+        )
+        .expect_err("empty captions");
+        assert!(captions.to_string().contains("no information-bearing"));
     }
 
     #[test]
@@ -2137,6 +2522,26 @@ mod tests {
         assert!(!scene_indices_complete([0, 1, 1].into_iter(), 3));
         assert!(!scene_indices_complete([0, 1, 3].into_iter(), 3));
         assert!(!scene_indices_complete([0, 1, 2, 2].into_iter(), 3));
+    }
+
+    #[test]
+    fn scene_index_error_reports_actual_indices() {
+        let scenes = [0, 2]
+            .into_iter()
+            .map(|index| crate::models::RewrittenScene {
+                index,
+                script_text: "text".into(),
+                visual_prompt: None,
+                motion_prompt: None,
+                keyframe_path: None,
+                start_ms: None,
+                end_ms: None,
+            })
+            .collect::<Vec<_>>();
+
+        let error = validate_scene_indices(&scenes, 3).expect_err("missing index");
+        assert!(error.to_string().contains("scene indices [0, 2]"));
+        assert!(error.to_string().contains("expected exactly 0..2"));
     }
 
     fn scene_with_metadata(metadata: Option<serde_json::Value>) -> Scene {

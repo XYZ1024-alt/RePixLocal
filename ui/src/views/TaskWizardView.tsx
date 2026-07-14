@@ -50,12 +50,17 @@ export function TaskWizardView({
           <ConfigurationStep
             config={wizard.draft.config}
             errors={wizard.errors}
+            videoModels={wizard.videoModels}
+            videoModelsLoading={wizard.videoModelsLoading}
             voiceOptions={wizard.voiceOptions}
             voiceOptionsLoading={wizard.voiceOptionsLoading}
+            onVideoModelChange={wizard.updateVideoModel}
             onChange={wizard.updateConfig}
           />
         ) : null}
-        {wizard.draft.step === 2 ? <ReviewStep draft={wizard.draft} /> : null}
+        {wizard.draft.step === 2 ? (
+          <ReviewStep draft={wizard.draft} videoModels={wizard.videoModels} />
+        ) : null}
         {wizard.submitError ? <ErrorNotice message={wizard.submitError} /> : null}
         <WizardFooter
           step={wizard.draft.step}

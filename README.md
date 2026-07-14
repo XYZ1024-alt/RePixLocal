@@ -114,12 +114,14 @@ RePixLocal/
 | # | 阶段 | 真实实现 | Provider / 工具 |
 |---|------|----------|-----------------|
 | 1 | Transcript Extraction | ✅ | FFmpeg 抽音频 + whisper.cpp；DeepSeek 内部 ASR 转写清洗 |
-| 2 | Script Rewrite | ✅ | FFmpeg 抽关键帧 + Qwen-VL 分析 + DeepSeek 改写 |
+| 2 | Script Rewrite | ✅ | Qwen-VL 提取视觉与画面字幕；DeepSeek 选择文案来源并改写 |
 | 3 | Storyboard Generation | ✅ | 关键帧 Base64 内联 + Tongyi img2img |
 | 4 | Segment Generation | ✅ | 分镜图 Base64 内联 + Seedance 图生视频 |
 | 5 | Final Render | ✅ | FFmpeg 拼接片段 + 混入 TTS 配音 |
 
 **Mock 模式**（设置 → Mock providers）：无需 API Key，五阶段使用本地占位数据，适合离线演示。
+
+视频复刻默认自动比较音频转写与画面信息字幕。检测到背景歌曲歌词与画面字幕无关时，流水线使用画面字幕生成配音文案；无法可靠判断时会明确失败，也可在高级选项中强制指定来源。
 
 **恢复运行**：失败或取消的任务可在控制台点击「恢复运行」，自动跳过已生成的阶段/场景产物，从断点继续。
 

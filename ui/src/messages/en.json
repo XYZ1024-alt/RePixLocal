@@ -250,11 +250,17 @@
     "pipelineOptions": "Pipeline Options",
     "pipelineOptionsDesc": "How the replica is rewritten and rendered.",
     "resolution": "Resolution",
+    "videoModel": "Video model",
+    "videoModelRequired": "Select a video model.",
+    "videoModelCapabilitiesUnavailable": "Capabilities are not defined for this video model.",
+    "resolutionUnsupported": "The selected resolution is not supported by this model.",
+    "capabilitiesUnavailable": "capabilities unavailable",
     "aspectRatio": "Aspect ratio",
     "language": "Language",
     "rewriteTone": "Rewrite tone",
     "rewriteLength": "Rewrite length",
     "voice": "Voice",
+    "narrativeSource": "Narrative source",
     "sceneCount": "Scene count",
     "sourceSubtitleTreatment": "Source subtitle treatment",
     "sourceSubtitleRegionRatio": "Source subtitle band height (%)",
@@ -304,10 +310,6 @@
       "pending": "pending"
     },
     "options": {
-      "resolution": {
-        "720p": "720p",
-        "1080p": "1080p"
-      },
       "aspectRatio": {
         "16:9": "16:9",
         "9:16": "9:16"
@@ -331,6 +333,11 @@
         "female-1": "Female 1",
         "male-1": "Male 1",
         "narrator": "Narrator"
+      },
+      "narrativeSource": {
+        "auto": "Auto detect",
+        "audio_transcript": "Audio transcript",
+        "on_screen_text": "On-screen text"
       },
       "sourceSubtitleTreatment": {
         "blur": "Blur and soften",

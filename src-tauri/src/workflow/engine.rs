@@ -11,6 +11,7 @@ use crate::errors::AppResult;
 use crate::media::ffmpeg::FfmpegRunner;
 use crate::media::whisper::WhisperRunner;
 use crate::models::{PipelineRun, TaskStatus, WorkflowTaskType};
+use crate::providers::video_capabilities;
 use crate::storage::local_assets::AssetManager;
 use crate::workflow::events::{emit_pipeline_event, PipelineEvent};
 use crate::workflow::runner::PipelineRunner;
@@ -63,6 +64,9 @@ impl WorkflowEngine {
             .wait_for_previous_run(task_id, &task.status)
             .await?;
         task = self.require_task(task_id).await?;
+        if !self.config.read().await.mock_providers {
+            video_capabilities::selection_from_config(&task.config_json)?;
+        }
         let run = self.repo.create_run(task_id).await?;
         self.prepare_started_run(&task, &run).await?;
         emit_pipeline_event(
