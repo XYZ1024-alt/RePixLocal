@@ -13,6 +13,7 @@ import type {
   CreateTaskPayload,
   PickedImageFile,
   PickedVideoFile,
+  ProviderModelOption,
   WizardDraft
 } from "@/types";
 import type { FieldErrors, WizardTranslator } from "./types";
@@ -24,9 +25,11 @@ const COSYVOICE_V3_PLUS_VOICES = VOICES.filter((voice) => voice !== "narrator");
 
 export const DEFAULT_CONFIG: TaskConfig = {
   taskType: "replicate",
-  audioSource: "tts",
+  narrativeSource: "auto",
   requirements: "",
   imagePaths: [],
+  videoProvider: "SEEDANCE",
+  videoModel: "",
   resolution: "1080p",
   aspectRatio: "16:9",
   language: "zh",
@@ -66,13 +69,13 @@ export function readDraft(): WizardDraft {
   }
 }
 
-export function hasDraftContent(draft: WizardDraft) {
+export function hasDraftContent(draft: WizardDraft, defaultConfig: TaskConfig = DEFAULT_CONFIG) {
   return Boolean(
     draft.title ||
       draft.file ||
       draft.images.length ||
       draft.step ||
-      JSON.stringify(draft.config) !== JSON.stringify(DEFAULT_CONFIG)
+      JSON.stringify(draft.config) !== JSON.stringify(defaultConfig)
   );
 }
 
@@ -88,12 +91,45 @@ export function validateSource(draft: WizardDraft, t: WizardTranslator): FieldEr
   return errors;
 }
 
-export function validateConfig(config: TaskConfig): FieldErrors {
+export function validateConfig(
+  config: TaskConfig,
+  videoModels: readonly ProviderModelOption[],
+  t: WizardTranslator
+): FieldErrors {
   const result = taskConfigSchema.safeParse(config);
-  if (result.success) return {};
-  return Object.fromEntries(
-    result.error.issues.map((issue) => [String(issue.path[0] ?? "config"), issue.message])
-  );
+  const errors: FieldErrors = result.success
+    ? {}
+    : Object.fromEntries(
+        result.error.issues.map((issue) => [String(issue.path[0] ?? "config"), issue.message])
+      );
+  const model = videoModels.find((option) => option.id === config.videoModel);
+  if (!config.videoModel) errors.videoModel = t("videoModelRequired");
+  else if (!model?.video_capabilities) errors.videoModel = t("videoModelCapabilitiesUnavailable");
+  else if (!model.video_capabilities.resolutions.includes(config.resolution)) {
+    errors.resolution = t("resolutionUnsupported");
+  }
+  return errors;
+}
+
+export function configForVideoModel(
+  config: TaskConfig,
+  model: ProviderModelOption
+): TaskConfig {
+  const capabilities = model.video_capabilities;
+  const resolution = capabilities?.resolutions.includes(config.resolution)
+    ? config.resolution
+    : capabilities?.default_resolution ?? "";
+  return { ...config, videoModel: model.id, resolution };
+}
+
+export function initialVideoModel(
+  config: TaskConfig,
+  models: readonly ProviderModelOption[],
+  preferredModel?: string
+) {
+  if (config.videoModel) return models.find((model) => model.id === config.videoModel);
+  if (preferredModel) return models.find((model) => model.id === preferredModel);
+  return models.find((model) => model.video_capabilities);
 }
 
 export function createPayload(draft: WizardDraft): CreateTaskPayload {

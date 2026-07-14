@@ -5,6 +5,7 @@ use crate::models::{ProviderListingCredentials, ProviderModelOption};
 use crate::providers::http_client::{
     build_http_client, build_http_client_direct, format_http_error,
 };
+use crate::providers::video_capabilities;
 
 const DASHSCOPE_MODELS_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1/models";
 const MODELS_TIMEOUT_SECS: u64 = 30;
@@ -25,8 +26,8 @@ pub fn mock_models(provider: &str) -> Vec<ProviderModelOption> {
             model_option("tongyi-mock-2", "Tongyi Mock 2"),
         ],
         "SEEDANCE" => vec![
-            model_option("seedance-mock-1", "Seedance Mock 1"),
-            model_option("seedance-mock-2", "Seedance Mock 2"),
+            video_model_option("SEEDANCE", "seedance-mock-1", "Seedance Mock 1"),
+            video_model_option("SEEDANCE", "seedance-mock-2", "Seedance Mock 2"),
         ],
         "COSYVOICE" => vec![
             model_option("cosyvoice-v3-flash", "cosyvoice-v3-flash"),
@@ -105,7 +106,7 @@ pub fn parse_seedance_models_response(value: &Value) -> AppResult<Vec<ProviderMo
             let id = entry.get("id")?.as_str()?;
             let name = entry.get("name").and_then(Value::as_str).unwrap_or(id);
             if is_seedance_model(id, name) {
-                Some(model_option(id, name))
+                Some(video_model_option("SEEDANCE", id, name))
             } else {
                 None
             }
@@ -180,6 +181,15 @@ fn model_option(id: &str, name: &str) -> ProviderModelOption {
     ProviderModelOption {
         id: id.to_string(),
         name: name.to_string(),
+        video_capabilities: None,
+    }
+}
+
+fn video_model_option(provider: &str, id: &str, name: &str) -> ProviderModelOption {
+    ProviderModelOption {
+        id: id.to_string(),
+        name: name.to_string(),
+        video_capabilities: video_capabilities::capabilities_for(provider, id),
     }
 }
 
@@ -260,6 +270,14 @@ mod tests {
         let models = parse_seedance_models_response(&value).expect("parse seedance models");
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "seedance-1.0-pro");
+        assert_eq!(
+            models[0]
+                .video_capabilities
+                .as_ref()
+                .expect("video capabilities")
+                .resolutions,
+            ["480p", "720p", "1080p"]
+        );
     }
 
     #[test]

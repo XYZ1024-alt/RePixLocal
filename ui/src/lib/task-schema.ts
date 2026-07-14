@@ -1,13 +1,13 @@
 import { z } from "zod";
 
-export const RESOLUTIONS = ["720p", "1080p"] as const;
 export const ASPECT_RATIOS = ["16:9", "9:16"] as const;
 export const LANGUAGES = ["zh", "en"] as const;
 export const REWRITE_TONES = ["faithful", "casual", "professional", "dramatic"] as const;
 export const REWRITE_LENGTHS = ["shorter", "same", "longer"] as const;
 export const VOICES = ["female-1", "male-1", "narrator"] as const;
 export const TASK_TYPES = ["replicate", "image_to_video"] as const;
-export const AUDIO_SOURCES = ["tts"] as const;
+export const VIDEO_PROVIDERS = ["SEEDANCE"] as const;
+export const NARRATIVE_SOURCES = ["auto", "audio_transcript", "on_screen_text"] as const;
 export const SOURCE_SUBTITLE_TREATMENTS = ["blur", "none"] as const;
 export const MIN_SCENE_COUNT = 1;
 export const DEFAULT_SCENE_COUNT = 5;
@@ -21,10 +21,12 @@ export const MIN_SOURCE_SUBTITLE_REGION_RATIO = 0.08;
 
 export const taskConfigSchema = z.object({
   taskType: z.enum(TASK_TYPES).default("replicate"),
-  audioSource: z.enum(AUDIO_SOURCES).default("tts"),
+  narrativeSource: z.enum(NARRATIVE_SOURCES).default("auto"),
   requirements: z.string().trim().optional(),
   imagePaths: z.array(z.string()).optional(),
-  resolution: z.enum(RESOLUTIONS).default("1080p"),
+  videoProvider: z.enum(VIDEO_PROVIDERS).default("SEEDANCE"),
+  videoModel: z.string().trim().default(""),
+  resolution: z.string().trim().min(1).default("1080p"),
   aspectRatio: z.enum(ASPECT_RATIOS).default("16:9"),
   language: z.enum(LANGUAGES).default("zh"),
   rewriteTone: z.enum(REWRITE_TONES).default("faithful"),

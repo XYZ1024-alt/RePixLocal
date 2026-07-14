@@ -5,6 +5,7 @@ import {
   MAX_SOURCE_SUBTITLE_REGION_RATIO,
   MIN_SCENE_COUNT,
   MIN_SOURCE_SUBTITLE_REGION_RATIO,
+  NARRATIVE_SOURCES,
   REWRITE_LENGTHS,
   REWRITE_TONES,
   SOURCE_SUBTITLE_TREATMENTS,
@@ -30,6 +31,7 @@ export function AdvancedOptions({
   const t = useTranslations("wizard");
   return (
     <div className="grid gap-4 pt-2 md:grid-cols-2">
+      {!imageTask ? <NarrativeSource config={config} errors={errors} onChange={onChange} /> : null}
       <WizardSelectField
         label={t("rewriteTone")}
         error={errors.rewriteTone}
@@ -53,6 +55,20 @@ type OptionProps = {
   errors: FieldErrors;
   onChange: ConfigChangeHandler;
 };
+
+function NarrativeSource({ config, errors, onChange }: OptionProps) {
+  const t = useTranslations("wizard");
+  return (
+    <WizardSelectField
+      label={t("narrativeSource")}
+      error={errors.narrativeSource}
+      value={config.narrativeSource}
+      options={NARRATIVE_SOURCES}
+      onChange={(value) => onChange("narrativeSource", value)}
+      getLabel={(value) => t(`options.narrativeSource.${value}`)}
+    />
+  );
+}
 
 function RewriteLength({ config, errors, onChange }: OptionProps) {
   const t = useTranslations("wizard");

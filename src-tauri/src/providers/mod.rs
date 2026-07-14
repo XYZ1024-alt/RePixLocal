@@ -102,3 +102,4 @@ pub mod model_catalog;
 pub mod qwen_vl;
 pub mod seedance;
 pub mod tongyi;
+pub mod video_capabilities;

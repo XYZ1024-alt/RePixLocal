@@ -13,7 +13,8 @@ use crate::models::{
     Task, ToolCheck, WhisperModelStatus,
 };
 use crate::providers::{
-    deepseek::DeepSeekClient, model_catalog, validate_provider_config, ProviderConfig,
+    deepseek::DeepSeekClient, model_catalog, validate_provider_config, video_capabilities,
+    ProviderConfig,
 };
 use crate::state::AppState;
 
@@ -22,6 +23,7 @@ pub async fn create_task(
     input: CreateTaskInput,
     state: State<'_, AppState>,
 ) -> Result<Task, String> {
+    video_capabilities::selection_from_config(&input.config_json).map_err(command_error)?;
     state.repo.create_task(input).await.map_err(command_error)
 }
 

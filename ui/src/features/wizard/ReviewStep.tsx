@@ -1,10 +1,17 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useTranslations } from "@/i18n/context";
-import type { WizardDraft } from "@/types";
+import type { ProviderModelOption, WizardDraft } from "@/types";
 
-export function ReviewStep({ draft }: { draft: WizardDraft }) {
+export function ReviewStep({
+  draft,
+  videoModels
+}: {
+  draft: WizardDraft;
+  videoModels: readonly ProviderModelOption[];
+}) {
   const t = useTranslations("wizard");
-  const rows = [
+  const videoModel = videoModels.find((model) => model.id === draft.config.videoModel);
+  const rows: Array<[string, string]> = [
     [t("taskMode"), t(`options.taskType.${draft.config.taskType}`)],
     [t("taskTitle"), draft.title],
     [
@@ -13,11 +20,18 @@ export function ReviewStep({ draft }: { draft: WizardDraft }) {
         ? draft.file?.name ?? ""
         : t("imageCount", { count: draft.images.length })
     ],
+    [t("videoModel"), videoModel?.name ?? draft.config.videoModel],
     [t("resolution"), draft.config.resolution],
     [t("aspectRatio"), draft.config.aspectRatio],
-    [t("language"), t(`options.language.${draft.config.language}`)],
-    [t("voice"), t(`options.voice.${draft.config.voice}`)]
+    [t("language"), t(`options.language.${draft.config.language}`)]
   ];
+  if (draft.config.taskType === "replicate") {
+    rows.push([
+      t("narrativeSource"),
+      t(`options.narrativeSource.${draft.config.narrativeSource}`)
+    ]);
+  }
+  rows.push([t("voice"), t(`options.voice.${draft.config.voice}`)]);
   return (
     <Card>
       <CardHeader>

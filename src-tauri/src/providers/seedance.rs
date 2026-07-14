@@ -36,6 +36,15 @@ pub struct SegmentPollResult {
     pub source_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SegmentSubmitInput<'a> {
+    pub frame_path: &'a Path,
+    pub duration_sec: f64,
+    pub motion_prompt: Option<&'a str>,
+    pub model: &'a str,
+    pub resolution: &'a str,
+}
+
 #[derive(Debug, Clone)]
 pub struct SeedanceClient {
     repo: Arc<Repository>,
@@ -46,19 +55,17 @@ impl SeedanceClient {
         Self { repo }
     }
 
-    pub async fn submit_segment(
-        &self,
-        frame_path: &Path,
-        duration_sec: f64,
-        motion_prompt: Option<&str>,
-        resolution: Option<&str>,
-    ) -> AppResult<String> {
-        let image_url = image_data_url(frame_path).await?;
+    pub async fn submit_segment(&self, input: SegmentSubmitInput<'_>) -> AppResult<String> {
+        let image_url = image_data_url(input.frame_path).await?;
         let settings = self.repo.get_provider_settings("SEEDANCE").await?;
         let base_url = settings.base_url.trim_end_matches('/');
-        let text = segment_text(duration_sec, motion_prompt, resolution);
+        let text = segment_text(
+            input.duration_sec,
+            input.motion_prompt,
+            Some(input.resolution),
+        );
         let payload = json!({
-            "model": settings.model,
+            "model": input.model,
             "generate_audio": false,
             "content": [
                 { "type": "text", "text": text },

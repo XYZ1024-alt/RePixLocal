@@ -72,10 +72,20 @@ type MockProviderModelRequest = {
   credentials: { api_key: string; base_url: string } | null;
 };
 
+type MockProviderModel = {
+  id: string;
+  name: string;
+  video_capabilities?: {
+    resolutions: string[];
+    default_resolution: string;
+  };
+};
+
 type E2eControls = {
   assetRows: MockAsset[];
   callCounts: Record<string, number>;
   cosyvoiceModel: "cosyvoice-v3-flash" | "cosyvoice-v3-plus" | null;
+  createdTaskInputs: Array<Record<string, unknown>>;
   dashscopeCredential: MockDashscopeCredential | null;
   dashboardMode: "auto" | "empty" | "running" | "completed";
   failListDashscopeCredentials: boolean;
@@ -85,7 +95,7 @@ type E2eControls = {
   listRunsDelayMs: number;
   providerCredentials: MockProviderCredential[];
   providerModelRequests: MockProviderModelRequest[];
-  providerModelResults: Record<string, Array<{ id: string; name: string }>>;
+  providerModelResults: Record<string, MockProviderModel[]>;
   revealedAssetPaths: string[];
   savedDashscopeInputs: Array<Record<string, unknown>>;
   savedProviderInputs: Array<Record<string, unknown>>;
@@ -178,6 +188,92 @@ test("creates a mocked video task and opens the completed run", async ({ page })
   await expect(page.getByText("Final output", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "Assets", exact: true }).click();
   await expect(page.getByText("final.mp4")).toBeVisible();
+  const controls = await getMockControls(page);
+  expect(controls.createdTaskInputs.at(-1)?.config_json).toMatchObject({
+    narrativeSource: "auto",
+    videoProvider: "SEEDANCE",
+    videoModel: "seedance-mock-1",
+    resolution: "720p"
+  });
+});
+
+test("updates resolution options when the video model changes", async ({ page }) => {
+  await installTauriMock(page, {
+    providerModelResults: {
+      SEEDANCE: [
+        {
+          id: "seedance-lite",
+          name: "Seedance Lite",
+          video_capabilities: {
+            resolutions: ["480p", "720p"],
+            default_resolution: "720p"
+          }
+        },
+        {
+          id: "seedance-ultra",
+          name: "Seedance Ultra",
+          video_capabilities: {
+            resolutions: ["1080p"],
+            default_resolution: "1080p"
+          }
+        }
+      ]
+    }
+  });
+  await page.goto("/");
+  await openWizardConfig(page);
+
+  const videoModel = page.getByRole("combobox", { name: "Video model", exact: true });
+  const resolution = page.getByRole("combobox", { name: "Resolution", exact: true });
+  await expect(videoModel).toContainText("Seedance Lite");
+  await expect(resolution).toContainText("720p");
+  await resolution.click();
+  await expect(page.getByRole("option", { name: "480p", exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "1080p", exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await videoModel.click();
+  await page.getByRole("option", { name: "Seedance Ultra", exact: true }).click();
+  await expect(resolution).toContainText("1080p");
+  await resolution.click();
+  await expect(page.getByRole("option", { name: "1080p", exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "720p", exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Create & Run", exact: true }).click();
+  const controls = await getMockControls(page);
+  expect(controls.createdTaskInputs.at(-1)?.config_json).toMatchObject({
+    videoProvider: "SEEDANCE",
+    videoModel: "seedance-ultra",
+    resolution: "1080p"
+  });
+});
+
+test("submits the selected narrative source from advanced options", async ({ page }) => {
+  await installTauriMock(page);
+  await page.goto("/");
+  await openWizardConfig(page);
+
+  await page.getByRole("button", { name: "Advanced options", exact: true }).click();
+  const narrativeSource = page.getByRole("combobox", {
+    name: "Narrative source",
+    exact: true
+  });
+  await expect(narrativeSource).toContainText("Auto detect");
+  await narrativeSource.click();
+  await page.getByRole("option", { name: "On-screen text", exact: true }).click();
+
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByText("Narrative source", { exact: true })).toBeVisible();
+  await expect(page.getByText("On-screen text", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Create & Run", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "source" })).toBeVisible();
+
+  const controls = await getMockControls(page);
+  const submitted = controls.createdTaskInputs.at(-1);
+  expect(submitted?.config_json).toMatchObject({ narrativeSource: "on_screen_text" });
+  expect(submitted?.config_json).not.toHaveProperty("audioSource");
 });
 
 test("hides the unsupported narrator voice for CosyVoice V3 Plus", async ({ page }) => {
@@ -881,6 +977,7 @@ async function installTauriMock(page: Page, initialControls: Partial<E2eControls
       assetRows: [],
       callCounts: {},
       cosyvoiceModel: "cosyvoice-v3-flash",
+      createdTaskInputs: [],
       dashscopeCredential: null,
       dashboardMode: "auto",
       failListDashscopeCredentials: false,
@@ -890,7 +987,26 @@ async function installTauriMock(page: Page, initialControls: Partial<E2eControls
       listRunsDelayMs: 0,
       providerCredentials: [],
       providerModelRequests: [],
-      providerModelResults: {},
+      providerModelResults: {
+        SEEDANCE: [
+          {
+            id: "seedance-mock-1",
+            name: "Seedance Mock 1",
+            video_capabilities: {
+              resolutions: ["480p", "720p"],
+              default_resolution: "720p"
+            }
+          },
+          {
+            id: "seedance-mock-2",
+            name: "Seedance Mock 2",
+            video_capabilities: {
+              resolutions: ["480p", "720p", "1080p"],
+              default_resolution: "1080p"
+            }
+          }
+        ]
+      },
       revealedAssetPaths: [],
       runRows: [],
       savedDashscopeInputs: [],
@@ -1256,7 +1372,10 @@ async function installTauriMock(page: Page, initialControls: Partial<E2eControls
             size_bytes: 1_048_576
           };
         case "create_task": {
-          const input = args?.input as { title?: string } | undefined;
+          const input = args?.input as
+            | { title?: string; config_json?: Record<string, unknown> }
+            | undefined;
+          controls.createdTaskInputs.push(JSON.parse(JSON.stringify(input ?? {})));
           createdTaskTitle = input?.title?.trim() || "source";
           return {
             id: taskId,
